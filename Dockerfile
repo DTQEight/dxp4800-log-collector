@@ -17,9 +17,11 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 拷贝源码
+# 拷贝源码（先确保目录存在，避免空目录 checkout 不存在时 COPY 失败）
+RUN mkdir -p /app/app /app/templates /app/static
 COPY app/ ./app/
 COPY templates/ ./templates/
+# static 目录通过 .gitkeep 保活（Git 不跟踪空目录），未来放 CSS/JS 在这里即可
 COPY static/ ./static/
 
 EXPOSE 5000
