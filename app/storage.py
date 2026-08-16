@@ -6,27 +6,32 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-TIMESTAMP_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z?)\s(.*)$", re.DOTALL)
+TIMESTAMP_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[\.\d]*Z?)\s(.*)$", re.DOTALL)
+# Docker TTY 输出可能没有真正的 RFC3339；保留兼容
+_TODAY_CACHE = (None, "", "")  # (date_obj, dir_path, file_path)
 
 
 class LogStorage:
-    """负责按容器+日期分类写入日志文件"""
+    """按容器+日期分类写入日志文件"""
 
     @staticmethod
-    def _container_dir(container_name: str) -> str:
+    def _today_paths(container_name: str):
+        """缓存同一日期下的 dir/file 路径，省掉大量 stat()/makedirs()"""
+        global _TODAY_CACHE
+        today = date.today()
+        cached_date, cached_dir, cached_file = _TODAY_CACHE
+        if cached_date == today and cached_dir.endswith(container_name):
+            return cached_dir, cached_file
         d = os.path.join(Config.LOG_STORAGE_PATH, container_name)
         os.makedirs(d, exist_ok=True)
-        return d
+        fp = os.path.join(d, f"{today.isoformat()}.log")
+        _TODAY_CACHE = (today, d, fp)
+        return d, fp
 
     @staticmethod
-    def _today_file(container_name: str) -> str:
-        d = LogStorage._container_dir(container_name)
-        return os.path.join(d, f"{date.today().isoformat()}.log")
-
-    @staticmethod
-    def append_log(container_name: str, raw_line: str):
-        """解析并写入单行日志，返回解析后的(timestamp, content)"""
-        raw_line = raw_line.rstrip("\n")
+    def _parse_line(raw_line: str):
+        """解析单行日志 → (timestamp_iso, content)，失败用当前时间兜底"""
+        raw_line = raw_line.rstrip("\r\n")
         if not raw_line:
             return None, None
         ts = None
@@ -40,15 +45,46 @@ class LogStorage:
                 ts = datetime.now().isoformat()
         else:
             ts = datetime.now().isoformat()
-
-        fpath = LogStorage._today_file(container_name)
-        try:
-            with open(fpath, "a", encoding="utf-8") as f:
-                f.write(f"[{ts}] {content}\n")
-        except Exception as e:
-            logger.error(f"写入日志文件失败 {fpath}: {e}")
-
         return ts, content
+
+    @staticmethod
+    def append_log(container_name: str, raw_line: str):
+        """兼容旧接口：写单行（内部走批量）"""
+        ts, content = LogStorage.append_many(container_name, [raw_line])
+        if not ts:
+            return None, None
+        return ts[0], content[0]
+
+    @staticmethod
+    def append_many(container_name: str, raw_lines):
+        """批量写入（一次 open/write/close）；同时解析并返回 (timestamps, contents) 两个列表。
+
+        没解析成功的行 timestamps/contents 对会跳过（写文件仍保留原文，不丢日志）。
+        """
+        if not raw_lines:
+            return [], []
+        _, fpath = LogStorage._today_paths(container_name)
+
+        # 一次遍历：既拼写出串，又做 ts 解析（单遍最省 CPU）
+        chunks: list[str] = []
+        timestamps: list[str] = []
+        contents: list[str] = []
+        for raw in raw_lines:
+            line = raw.rstrip("\r\n")
+            if not line:
+                continue
+            ts, content = LogStorage._parse_line(line)
+            chunks.append(f"[{ts}] {content}\n")
+            timestamps.append(ts)
+            contents.append(content)
+
+        if chunks:
+            try:
+                with open(fpath, "a", encoding="utf-8", buffering=128 * 1024) as f:
+                    f.write("".join(chunks))
+            except Exception as e:
+                logger.error(f"写入日志文件失败 {fpath}: {e}")
+        return timestamps, contents
 
     @staticmethod
     def list_container_files(container_name: str):
@@ -66,13 +102,45 @@ class LogStorage:
         if not os.path.isfile(fpath):
             return ""
         try:
+            if tail and tail > 0:
+                # 避免把 100MB 文件全读进来再切片；用 seek 从尾部找换行数
+                return LogStorage._read_tail(fpath, tail)
             with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                if tail and tail > 0:
-                    lines = f.readlines()
-                    return "".join(lines[-tail:])
                 return f.read()
         except Exception as e:
             logger.error(f"读取日志文件失败 {fpath}: {e}")
+            return ""
+
+    @staticmethod
+    def _read_tail(fpath: str, tail: int) -> str:
+        """高效 tail N 行：从文件末尾倒着读块，直到凑够 N 行"""
+        avg_line_bytes_est = 200
+        chunk = max(avg_line_bytes_est * tail, 8192)
+        try:
+            size = os.path.getsize(fpath)
+        except OSError:
+            return ""
+        if size == 0:
+            return ""
+        try:
+            with open(fpath, "rb") as f:
+                data = b""
+                pos = size
+                newlines = 0
+                while pos > 0 and newlines <= tail:
+                    read_sz = min(chunk, pos)
+                    pos -= read_sz
+                    f.seek(pos)
+                    buf = f.read(read_sz)
+                    data = buf + data
+                    newlines = data.count(b"\n")
+                    chunk *= 2     # 不够就加倍读下一次，减少循环次数
+                lines = data.decode("utf-8", errors="replace").splitlines()
+                if len(lines) > tail:
+                    lines = lines[-tail:]
+                return "\n".join(lines) + ("\n" if lines else "")
+        except Exception as e:
+            logger.error(f"tail 读取失败 {fpath}: {e}")
             return ""
 
     @staticmethod
@@ -101,7 +169,6 @@ class LogStorage:
                         removed += 1
                 except Exception:
                     pass
-            # 空目录也删掉
             try:
                 if not os.listdir(cdir):
                     shutil.rmtree(cdir)
