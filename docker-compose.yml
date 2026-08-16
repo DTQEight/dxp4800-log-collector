@@ -1,24 +1,27 @@
 services:
   dxp4800-log-collector:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # 从 GitHub Container Registry 直接拉取（GitHub Actions 自动构建）
+    # 支持 linux/amd64（DXP4800 x86 版）和 linux/arm64
+    image: ghcr.io/dtqeight/dxp4800-log-collector:latest
+    # 改成固定版本更稳，例如：
+    # image: ghcr.io/dtqeight/dxp4800-log-collector:1.0.0
+    pull_policy: always          # 每次启动前检查 GHCR 有无新镜像；嫌慢可改成 missing
     container_name: dxp4800-log-collector
     restart: unless-stopped
     ports:
-      - "5000:5000"   # Web界面端口，可自行修改
+      - "5000:5000"              # Web界面端口，可自行修改
     environment:
       - TZ=Asia/Shanghai
       # 可调参数：详见 .env.example
       - LOG_RETENTION_DAYS=30
       - COLLECT_INTERVAL_SEC=60
-      # Web登录密码建议修改
+      # Web登录密码建议修改（或放到 .env 里引用）
       - WEB_USERNAME=admin
       - WEB_PASSWORD=ChangeMe123!
     volumes:
       # 必须：挂载Docker socket，才能读取宿主机（绿联NAS）上的所有容器日志
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # 日志文件持久化：映射到NAS本地目录（建议改为NAS上的大容量目录，如 /volume1/docker/dxp4800-logs 等）
+      # 日志文件持久化：建议改为NAS上的绝对路径（如 /volume1/docker/dxp4800-logs）
       - ./logs:/app/logs
       # 数据库持久化（存储日志元数据+索引）
       - ./data:/app/data
@@ -35,3 +38,11 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+# =====================================================
+# 【给想改成本地 build 的开发者的备份】
+# 把上面 image/pull_policy 注释掉，再取消下面 build 块的注释即可：
+# =====================================================
+#    build:
+#      context: .
+#      dockerfile: Dockerfile

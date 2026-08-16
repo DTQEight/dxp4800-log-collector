@@ -42,34 +42,64 @@ dxp4800-log-collector/
 
 ## 🚀 在绿联 DXP4800 上部署
 
-### 方式一：docker compose（推荐）
+推荐采用 **GitHub Actions CI 构建 → GHCR 镜像仓库 → NAS 拉取镜像** 的方式，不用在 NAS 本地编译，省 CPU、启动快、多架构兼容（x86_64 / arm64 通用）。
+
+### 方式一：直接拉取 GHCR 镜像（⭐NAS 上推荐）
+
+镜像已由 GitHub Actions 自动构建并发布到 [GHCR Packages](https://github.com/DTQEight/dxp4800-log-collector/pkgs/container/dxp4800-log-collector)，NAS 只需三步：
+
+```bash
+# ① 在 NAS 上创建工作目录（建议放共享盘绝对路径）
+mkdir -p /volume1/docker/dxp4800-log-collector
+cd /volume1/docker/dxp4800-log-collector
+
+# ② 把仓库里的 docker-compose.yml 和 .env.example 下载下来（或者 clone 整个仓库）
+#    方式A：只拉必要文件（需要 curl）
+curl -sSL https://raw.githubusercontent.com/DTQEight/dxp4800-log-collector/main/docker-compose.yml -o docker-compose.yml
+curl -sSL https://raw.githubusercontent.com/DTQEight/dxp4800-log-collector/main/.env.example -o .env.example
+cp .env.example .env && sed -i 's/ChangeMe123!/你自己的强密码/g' .env
+
+# ③ 拉取镜像并启动（NAS 首次拉 GHCR 无需登录，公开仓库可直接拉）
+docker compose pull
+docker compose up -d
+```
+
+升级也只需要一行：
+```bash
+cd /volume1/docker/dxp4800-log-collector
+docker compose pull && docker compose up -d
+```
+
+> 访问 Web：浏览器打开 `http://<NAS_IP>:5000`，默认账号 `admin` / 你在 `.env` 里设置的密码。
+
+---
+
+### 方式二：NAS 本地 build（无需 GitHub 网络）
 
 1. **把项目目录上传到 NAS**
    例如放到：`/volume1/docker/dxp4800-log-collector/`
 
-2. **（可选）修改环境变量**
+2. **修改 docker-compose.yml：把 `image:` 行注释掉，取消文件末尾 `build:` 块的注释**
+
+3. **（可选）修改环境变量**
    ```bash
    cp .env.example .env
    vi .env   # 修改默认密码等
    ```
 
-3. **启动容器**
+4. **启动容器**
    ```bash
    cd /volume1/docker/dxp4800-log-collector
    docker compose up -d --build
    ```
 
-4. **访问 Web 界面**
-   浏览器打开：`http://<NAS_IP>:5000`
-   默认账号：`admin` / `ChangeMe123!`（请及时修改）
+### 方式三：绿联「Docker管理器」UI 创建
 
-### 方式二：绿联「Docker管理器」UI 创建
-
-1. 项目文件夹 → 右键「在终端打开」 → 构建镜像：
-   ```bash
-   docker build -t dxp4800-log-collector:latest .
-   ```
-2. 打开绿联 Docker 管理器 → 镜像 → 找到刚才的镜像 → 「创建容器」
+1. 打开绿联 Docker 管理器 → 「镜像」→「拉取」
+   - 镜像仓库：选 **GHCR / GitHub 容器仓库**（若下拉里没有，就手动输 `ghcr.io`）
+   - 镜像名：`dtqeight/dxp4800-log-collector`
+   - 标签：`latest`（或指定稳定版如 `1.0.0`）
+2. 镜像 → 找到刚才拉下来的镜像 → 「创建容器」
 3. 关键配置：
    - 端口映射：`5000` → `5000`
    - 卷挂载：
@@ -77,6 +107,25 @@ dxp4800-log-collector/
      - `./logs` → `/app/logs`
      - `./data` → `/app/data`
    - 环境变量：按需设置 `WEB_PASSWORD` 等
+
+---
+
+## 🚀 镜像自动构建工作流（开发者看）
+
+项目内置了 [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml)，满足以下任一条件就会触发 GitHub Actions：
+
+| 触发条件 | 生成的镜像 tag |
+| --- | --- |
+| 推送到 `main` 分支 | `:latest`、`:sha-<短hash>` |
+| 打 git tag `v1.2.3` | `:1.2.3`、`:1.2`、`:1`、`:latest` |
+| Actions 页面手动 Run workflow | 可自定义后缀（如 `:beta`） |
+
+构建产物：
+- 多架构：`linux/amd64`（DXP4800 x86 版用）+ `linux/arm64`（未来换 ARM NAS 免重编）
+- 已启用 SBOM + Provenance 签名，符合 GitHub supply-chain security
+- 使用 `actions/cache` + `type=gha` 缓存，第二次构建 30s 左右即可完成
+
+镜像地址：`ghcr.io/dtqeight/dxp4800-log-collector[:tag]`
 
 ## ⚙️ 可调参数（环境变量）
 
