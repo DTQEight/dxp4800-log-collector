@@ -86,13 +86,28 @@ def create_app() -> Flask:
     @login_required
     def api_container_files(container_name):
         files = LogStorage.list_container_files(container_name)
-        return jsonify({"files": files})
+        # 顺带返回每个文件的大小，前端能提示"大文件建议只取最后N行"
+        import os
+        info = []
+        for fn in files:
+            fpath = os.path.join(Config.LOG_STORAGE_PATH, container_name, fn)
+            size = 0
+            try:
+                size = os.path.getsize(fpath)
+            except OSError:
+                pass
+            info.append({"name": fn, "size": size})
+        return jsonify({"files": info})
 
     @app.route("/api/containers/<container_name>/files/<filename>")
     @login_required
     def api_read_file(container_name, filename):
         tail = request.args.get("tail", type=int, default=0)
         fmt = request.args.get("format", "text")
+        # 默认只读最后5000行（预览不卡死）；传 tail=0 再传 full=1 才拿全文
+        full = request.args.get("full", default="0") in ("1", "true", "True")
+        if tail == 0 and not full:
+            tail = 5000
         content = LogStorage.read_log_file(container_name, filename, tail=tail)
         if fmt == "download":
             return Response(
@@ -141,6 +156,8 @@ def create_app() -> Flask:
     @login_required
     def api_tail(cid_or_name):
         n = request.args.get("n", type=int, default=200)
+        # 防止一次性拉太多把 NAS Python 进程撑爆
+        n = min(max(1, n), 20000)
         text = DockerClient().get_container_logs(cid_or_name, tail=n) or ""
         return Response(text, mimetype="text/plain; charset=utf-8")
 
