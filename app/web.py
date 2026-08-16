@@ -1,11 +1,13 @@
 import io
 import csv
 import json
+import os
+import time
 import logging
 from functools import wraps
 from flask import (
     Flask, render_template, request, jsonify, Response, abort,
-    send_from_directory, session, redirect, url_for
+    send_from_directory, session, redirect, url_for, stream_with_context
 )
 from app.config import Config
 from app.docker_client import DockerClient
@@ -104,61 +106,121 @@ def create_app() -> Flask:
     def api_read_file(container_name, filename):
         tail = request.args.get("tail", type=int, default=0)
         fmt = request.args.get("format", "text")
-        # 默认只读最后5000行（预览不卡死）；传 tail=0 再传 full=1 才拿全文
         full = request.args.get("full", default="0") in ("1", "true", "True")
-        if tail == 0 and not full:
-            tail = 5000
-        content = LogStorage.read_log_file(container_name, filename, tail=tail)
+        # ====== 增量追新：前端传 from_bytes 或 from_lines，只返回文件新增尾部 ======
+        from_bytes = request.args.get("from_bytes", type=int, default=None)
+        from_iso   = request.args.get("from_ts", type=str, default=None)
+
+        base_dir = os.path.join(Config.LOG_STORAGE_PATH, container_name)
+        fpath = os.path.join(base_dir, filename)
+        if not os.path.isfile(fpath):
+            # 文件不存在：可能日期翻到新一天了，给前端一个"换新文件"的信号
+            if fmt == "download":
+                return Response("", status=404)
+            return Response("", status=404, mimetype="text/plain; charset=utf-8")
+
         if fmt == "download":
+            # 下载永远下整篇（不受 tail/增量影响）
+            with open(fpath, "rb") as f:
+                content = f.read().decode("utf-8", errors="replace")
             return Response(
                 content,
                 mimetype="text/plain",
                 headers={"Content-Disposition": f"attachment; filename={container_name}-{filename}"},
             )
-        return Response(content, mimetype="text/plain; charset=utf-8")
 
-    # ---------- API: 数据库搜索 ----------
-    @app.route("/api/logs/search")
-    @login_required
-    def api_search_logs():
-        params = {
-            "container_id": request.args.get("container_id"),
-            "container_name": request.args.get("container_name"),
-            "keyword": request.args.get("keyword"),
-            "start_time": request.args.get("start_time"),
-            "end_time": request.args.get("end_time"),
-            "limit": request.args.get("limit", type=int, default=500),
-            "offset": request.args.get("offset", type=int, default=0),
+        # ---------- 增量：from_bytes 优先（最省CPU/IO，不用扫描全文）----------
+        if from_bytes is not None and from_bytes >= 0:
+            try:
+                size = os.path.getsize(fpath)
+            except OSError: size = 0
+            if from_bytes > size:
+                # 文件被轮转/截断了：清空重来
+                content = LogStorage.read_log_file(container_name, filename, tail=max(1, tail or 50))
+                from_bytes_back = 0
+            else:
+                try:
+                    with open(fpath, "rb") as f:
+                        f.seek(from_bytes)
+                        chunk = f.read()
+                    content = chunk.decode("utf-8", errors="replace")
+                    from_bytes_back = size
+                except Exception as e:
+                    logger.error(f"增量读失败 {fpath} @{from_bytes}: {e}")
+                    content = LogStorage.read_log_file(container_name, filename, tail=max(1, tail or 50))
+                    from_bytes_back = 0
+            headers = {
+                "X-Content-Bytes": str(from_bytes_back),
+                "X-Content-NewFile": "0",
+                "Cache-Control": "no-store",
+            }
+            return Response(content, mimetype="text/plain; charset=utf-8", headers=headers)
+
+        # ---------- 整段预览：默认只给最后 5000 行 ----------
+        if tail == 0 and not full:
+            tail = 5000
+        content = LogStorage.read_log_file(container_name, filename, tail=tail)
+        size = 0
+        try: size = os.path.getsize(fpath)
+        except OSError: pass
+        headers = {
+            "X-Content-Bytes": str(size),
+            "X-Content-NewFile": "1",   # 首次读当"新文件"，前端拿到 size 作为后续 from_bytes 起点
+            "Cache-Control": "no-store",
         }
-        rows = models.search_logs(**params)
-        fmt = request.args.get("format", "json")
-        if fmt == "csv":
-            buf = io.StringIO()
-            w = csv.writer(buf)
-            w.writerow(["timestamp", "container_name", "source", "content"])
-            for r in rows:
-                w.writerow([r.get("timestamp"), r.get("container_name"), r.get("source"), r.get("content")])
-            return Response(
-                buf.getvalue(),
-                mimetype="text/csv",
-                headers={"Content-Disposition": "attachment; filename=logs.csv"},
-            )
-        if fmt == "json_download":
-            return Response(
-                json.dumps(rows, ensure_ascii=False, indent=2),
-                mimetype="application/json",
-                headers={"Content-Disposition": "attachment; filename=logs.json"},
-            )
-        return jsonify(rows)
+        return Response(content, mimetype="text/plain; charset=utf-8", headers=headers)
 
-    # ---------- API: 实时日志 tail ----------
+    # ---------- API: 简单轮询版的"追加最新行"（纯文本接口，前端兼容老版本）----------
+    # 同时支持 stream=true 走 SSE（当后端 STREAM_ENABLED 也开启时，浏览器端不做轮询，直接长连接省 CPU）
     @app.route("/api/containers/<cid_or_name>/tail")
     @login_required
     def api_tail(cid_or_name):
         n = request.args.get("n", type=int, default=200)
-        # 防止一次性拉太多把 NAS Python 进程撑爆
         n = min(max(1, n), 20000)
+        use_sse = request.args.get("stream", default="0") in ("1", "true", "True")
+        if use_sse and Config.STREAM_ENABLED:
+            return _tail_sse(cid_or_name, n)
         text = DockerClient().get_container_logs(cid_or_name, tail=n) or ""
         return Response(text, mimetype="text/plain; charset=utf-8")
+
+    def _tail_sse(cid_or_name: str, n: int) -> Response:
+        """真实 SSE tail -f：有新日志就推事件，不推则 15s 心跳。省轮询开销。"""
+        def gen():
+            # 先吐一次历史 n 行
+            hist = DockerClient().get_container_logs(cid_or_name, tail=n) or ""
+            yield f"event: lines\ndata: {json.dumps({'lines': hist.splitlines()})}\n\n"
+            # 再起流
+            last_ts = int(time.time())
+            stream = DockerClient().stream_container_logs(cid_or_name, since=last_ts)
+            if stream is None:
+                yield "event: error\ndata: stream_closed\n\n"
+                return
+            buf: list[str] = []
+            last_flush = time.monotonic()
+            try:
+                for line in stream:
+                    if not line:
+                        continue
+                    buf.append(line)
+                    now = time.monotonic()
+                    # 聚 500ms 再推一次事件，避免每一行都推，前端主线程崩
+                    if len(buf) >= 50 or (now - last_flush) >= 0.5:
+                        yield f"event: lines\ndata: {json.dumps({'lines': buf})}\n\n"
+                        buf.clear()
+                        last_flush = now
+                if buf:
+                    yield f"event: lines\ndata: {json.dumps({'lines': buf})}\n\n"
+            except GeneratorExit:
+                return
+            except Exception as e:
+                yield f"event: error\ndata: {json.dumps({'err': str(e)})}\n\n"
+            finally:
+                yield "event: end\ndata: {}\n\n"
+
+        return Response(
+            stream_with_context(gen()),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+        )
 
     return app

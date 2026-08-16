@@ -21,6 +21,10 @@
             background:#2563eb; border-color:#2563eb; color:#fff;
             box-shadow: 0 1px 2px rgba(37,99,235,.35);
         }
+        .icon-btn.auto-btn.active {
+            background:#16a34a; border-color:#16a34a; color:#fff;
+            box-shadow: 0 1px 2px rgba(22,163,74,.35);
+        }
 
         /* ===== 左侧容器列表 ===== */
         aside {
@@ -187,6 +191,15 @@
                     <button class="icon-btn tail-btn"        data-tail="2000"  onclick="setTail(2000)">2000</button>
                     <span class="font-size-tag" id="tail-tag" style="background:#e2e8f0;border-radius:6px;padding:2px 4px;">默认 20</span>
                 </div>
+                <span class="label" style="margin-left:6px;">🔄 自动刷新</span>
+                <div id="auto-buttons" style="display:inline-flex;gap:4px;">
+                    <button class="icon-btn auto-btn" data-sec="0"    onclick="setAuto(0)">关</button>
+                    <button class="icon-btn auto-btn" data-sec="5"    onclick="setAuto(5)">5s</button>
+                    <button class="icon-btn auto-btn active" data-sec="10"   onclick="setAuto(10)">10s</button>
+                    <button class="icon-btn auto-btn" data-sec="30"   onclick="setAuto(30)">30s</button>
+                    <button class="icon-btn auto-btn" data-sec="-1"   onclick="setAuto(-1)" title="真正实时（长连接 SSE，需后端 STREAM_ENABLED=true）">实时</button>
+                    <span class="font-size-tag" id="auto-tag" style="background:#e2e8f0;border-radius:6px;padding:2px 4px;">默认 10s</span>
+                </div>
                 <button class="icon-btn" onclick="wrapToggle('log-view')">↩ 换行</button>
                 <button class="icon-btn" onclick="zoomFont(-1)">A-</button>
                 <span class="font-size-tag" id="font-size-tag">13.5</span>
@@ -222,6 +235,13 @@ let lastLiveTailPromise = null;
 let lastLiveAbort = null;
 let currentTail = 20;   // 默认只预览最近20条，快速切换不卡
 
+/* -------- 自动刷新状态 -------- */
+let autoMode = 10;      // 0=关, 正整数=秒数轮询, -1=SSE长连接实时
+let autoTimer = 0;
+let autoBytesOffset = null;   // 上次读到的文件字节长度，用于 from_bytes 增量
+let autoSse = null;          // EventSource 实例（实时模式下）
+let autoBusy = false;        // 上一次轮询还没回来，下一次跳过，防堆积
+
 /* -------- 内存缓存：避免来回切换重复 HTTP -------- */
 const fileTextCache = new Map();   // key = "name|filename|tail" -> Promise<string>
 const liveTailCache = new Map();   // key = cid
@@ -256,6 +276,8 @@ function selectContainer(id,name){
     if(currentCid===id) return;               // 点同一个不重复
     // 取消之前正在执行的 tail 请求（防止旧请求晚到覆盖新内容）
     if(lastLiveAbort){ try{ lastLiveAbort.abort(); }catch(_){} }
+    // 切换容器：停掉自动刷新，等选中新日期文件后再启动
+    stopAutoRuntime();
 
     currentCid=id; currentName=name;
     document.querySelectorAll('.ctn').forEach(e=>e.classList.remove('active'));
@@ -342,7 +364,10 @@ async function readFile(fn, chip, size){
     $('btn-full-file').disabled = false;
     $('btn-full-file').textContent = (currentFileSize > 5*1024*1024) ? '📄 加载全文（慢）' : '📄 全文预览';
 
-    // 命中缓存直接用，不再请求
+    // 切文件：重置自动刷新的偏移 & 停掉旧 SSE
+    autoBytesOffset = null;
+    stopAutoRuntime();
+
     const cacheKey = `${currentName}|${fn}|${currentTail}`;
     let p = fileTextCache.get(cacheKey);
     if(!p){
@@ -353,6 +378,9 @@ async function readFile(fn, chip, size){
             try {
                 const url = `/api/containers/${encodeURIComponent(currentName)}/files/${encodeURIComponent(fn)}?tail=${currentTail}`;
                 const r = await fetch(url, { signal: ctrl.signal });
+                if(r.status===404){ return '（文件不存在，可能是日期翻到新一天，点左侧容器重新拉文件列表）'; }
+                const bytes = r.headers.get('X-Content-Bytes');
+                if(bytes) autoBytesOffset = Number(bytes);
                 return await r.text();
             } catch(err){
                 if(err.name==='AbortError') return '';
@@ -364,9 +392,96 @@ async function readFile(fn, chip, size){
     try {
         const text = await p;
         setTextareaChunked('log-view', text || `（${currentTail==0?'全文':`最近 ${currentTail} 条`}为空）`);
+        // 打开时如果用户选了自动刷新，立刻启动一次
+        startAutoRuntimeIfNeeded();
     } catch(e){
         $('log-view').classList.remove('loading');
         $('log-view').value = '❌ 读取失败：'+e.message;
+    }
+}
+
+/* ---------- 自动刷新：开/关 + 档位 ---------- */
+function setAuto(sec){
+    autoMode = Number(sec)||0;
+    document.querySelectorAll('.auto-btn').forEach(b=>{
+        b.classList.toggle('active', Number(b.dataset.sec)===autoMode);
+    });
+    const tag = $('auto-tag');
+    let label = '关';
+    if (autoMode === -1) label = '实时';
+    else if (autoMode > 0) label = `${autoMode}s`;
+    if(tag) tag.textContent = label;
+
+    stopAutoRuntime();
+    startAutoRuntimeIfNeeded();
+}
+function stopAutoRuntime(){
+    if(autoTimer){ clearInterval(autoTimer); autoTimer = 0; }
+    if(autoSse){ try{ autoSse.close(); }catch(_){} autoSse=null; }
+    autoBusy = false;
+}
+function startAutoRuntimeIfNeeded(){
+    stopAutoRuntime();
+    if(!currentFile || currentTab!=='file') return;
+    if(autoMode === -1){
+        startAutoSSE();
+    } else if(autoMode > 0){
+        autoTimer = setInterval(autoTickPoll, autoMode*1000);
+    }
+}
+/* 轮询模式：传 from_bytes=当前末尾偏移，后端 f.seek(偏移) 只读追加部分 */
+async function autoTickPoll(){
+    if(autoBusy || !currentFile || !currentName) return;
+    autoBusy = true;
+    try {
+        const qs = new URLSearchParams();
+        if(autoBytesOffset != null) qs.set('from_bytes', String(autoBytesOffset));
+        else qs.set('tail', String(currentTail || 20));
+        const r = await fetch(`/api/containers/${encodeURIComponent(currentName)}/files/${encodeURIComponent(currentFile)}?${qs.toString()}`);
+        if(r.status === 404){
+            // 日期翻到新一天：刷新文件列表并自动切到新一天（如果有）
+            if (currentTab==='file') await loadFiles();
+            return;
+        }
+        const delta = await r.text();
+        const bytes = r.headers.get('X-Content-Bytes');
+        if(bytes) autoBytesOffset = Number(bytes);
+        if(delta){
+            // 只追加到末尾（小批量追加比整份重绘省 N 倍 CPU）
+            const ta = $('log-view');
+            const atBottom = (ta.scrollHeight - ta.scrollTop - ta.clientHeight) < 60;
+            if(ta.value && !ta.value.endsWith('\n')) ta.value += '\n';
+            ta.value += (ta.value && !delta.startsWith('\n') ? '\n' : '') + delta;
+            if(atBottom) ta.scrollTop = ta.scrollHeight;
+        }
+    } catch(e){
+        console.debug('auto tick err',e);
+    } finally {
+        autoBusy = false;
+    }
+}
+/* 实时模式（SSE 长连接）：需要后端 STREAM_ENABLED=true，才用 /tail?stream=1 */
+function startAutoSSE(){
+    if(!currentCid) return;
+    try {
+        autoSse = new EventSource(`/api/containers/${encodeURIComponent(currentCid)}/tail?n=${Math.max(100, currentTail)}&stream=1`);
+        autoSse.addEventListener('lines', (e)=>{
+            try{
+                const {lines} = JSON.parse(e.data);
+                if(!lines || !lines.length) return;
+                const ta = $('log-view');
+                const atBottom = (ta.scrollHeight - ta.scrollTop - ta.clientHeight) < 60;
+                if(ta.value && !ta.value.endsWith('\n')) ta.value += '\n';
+                ta.value += lines.join('\n') + '\n';
+                if(atBottom) ta.scrollTop = ta.scrollHeight;
+            }catch(_){}
+        });
+        autoSse.addEventListener('error', ()=> stopAutoRuntime());
+        autoSse.addEventListener('end',   ()=> stopAutoRuntime());
+    } catch(e){
+        console.warn('SSE failed, fall back to polling 10s', e);
+        // 浏览器端 EventSource 失败就自动降级到 10s 轮询
+        if(autoMode === -1) setAuto(10);
     }
 }
 function setTail(n){
@@ -493,6 +608,8 @@ function switchTab(t){
     document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('active', e.dataset.tab===t));
     $('tab-file').style.display   = t==='file'   ? 'flex' : 'none';
     $('tab-search').style.display = t==='search' ? 'flex' : 'none';
+    if(t!=='file') stopAutoRuntime();
+    if(t==='file') startAutoRuntimeIfNeeded();
     if(t==='file' && currentName && !$('log-view').value) loadFiles();
 }
 
