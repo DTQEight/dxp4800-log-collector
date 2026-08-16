@@ -6,19 +6,67 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-TIMESTAMP_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[\.\d]*Z?)\s(.*)$", re.DOTALL)
-# Docker TTY 输出可能没有真正的 RFC3339；保留兼容
+# Docker 注入的 timestamps=True 格式：2026-08-16T09:12:34.567890123Z 或带 ±08:00
+TIMESTAMP_PATTERN = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[\.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s(.*)$",
+    re.DOTALL,
+)
 _TODAY_CACHE = (None, "", "")  # (date_obj, dir_path, file_path)
 
 
+def now_local() -> datetime:
+    """返回"本地时区的现在"（aware datetime），用于 fallback 时间和日常业务。"""
+    return datetime.now(Config.LOCAL_TZ)
+
+
+def today_local() -> date:
+    return now_local().date()
+
+
+def iso_local(dt: datetime) -> str:
+    """统一把 aware dt 转为本地时区再 isoformat（毫秒精度，去掉微秒尾部 000 以省空间）。"""
+    if not isinstance(dt, datetime):
+        raise TypeError("iso_local expects datetime, got %r" % type(dt))
+    if dt.tzinfo is None:
+        # 朴素 dt：按 LOCAL_TZ 解释（兼容旧库里存的没偏移时间）
+        dt = dt.replace(tzinfo=Config.LOCAL_TZ)
+    else:
+        dt = dt.astimezone(Config.LOCAL_TZ)
+    iso = dt.isoformat(timespec="milliseconds")
+    # +08:00 -> +08:00 保持；Z 一般不会出现，但也没事
+    return iso
+
+
+def parse_timestamp_to_local(raw: str) -> datetime | None:
+    """把 Docker 返回的 UTC / 带偏移时间戳解析 → 转为 LOCAL_TZ 的 aware datetime。"""
+    if not raw:
+        return None
+    s = raw.strip()
+    # Python 3.11 fromisoformat 不识别结尾 Z，先替换
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    # 支持 2026-08-16T08:00:00+0800 这种无冒号的
+    if len(s) >= 6 and s[-3] in "+-" and ":" not in s[-3:]:
+        s = s[:-2] + ":" + s[-2:]
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        # 日志里不带偏移的本地字符串，按 LOCAL_TZ 解释
+        dt = dt.replace(tzinfo=Config.LOCAL_TZ)
+    else:
+        dt = dt.astimezone(Config.LOCAL_TZ)
+    return dt
+
+
 class LogStorage:
-    """按容器+日期分类写入日志文件"""
+    """按容器+（本地时区）日期分类写入日志文件；统一显示本地时区时间。"""
 
     @staticmethod
     def _today_paths(container_name: str):
-        """缓存同一日期下的 dir/file 路径，省掉大量 stat()/makedirs()"""
         global _TODAY_CACHE
-        today = date.today()
+        today = today_local()
         cached_date, cached_dir, cached_file = _TODAY_CACHE
         if cached_date == today and cached_dir.endswith(container_name):
             return cached_dir, cached_file
@@ -30,26 +78,23 @@ class LogStorage:
 
     @staticmethod
     def _parse_line(raw_line: str):
-        """解析单行日志 → (timestamp_iso, content)，失败用当前时间兜底"""
+        """(ts_local_iso, content)"""
         raw_line = raw_line.rstrip("\r\n")
         if not raw_line:
             return None, None
-        ts = None
         content = raw_line
+        ts_local: datetime | None = None
         m = TIMESTAMP_PATTERN.match(raw_line)
         if m:
-            ts_str, content = m.group(1), m.group(2)
-            try:
-                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).isoformat()
-            except Exception:
-                ts = datetime.now().isoformat()
-        else:
-            ts = datetime.now().isoformat()
-        return ts, content
+            ts_raw, content = m.group(1), m.group(2)
+            ts_local = parse_timestamp_to_local(ts_raw)
+        if ts_local is None:
+            # 没 Docker 时间戳（比如 TTY/应用自己打了但格式不匹配）→ 用当前本地时间兜底
+            ts_local = now_local()
+        return iso_local(ts_local), content
 
     @staticmethod
     def append_log(container_name: str, raw_line: str):
-        """兼容旧接口：写单行（内部走批量）"""
         ts, content = LogStorage.append_many(container_name, [raw_line])
         if not ts:
             return None, None
@@ -57,15 +102,9 @@ class LogStorage:
 
     @staticmethod
     def append_many(container_name: str, raw_lines):
-        """批量写入（一次 open/write/close）；同时解析并返回 (timestamps, contents) 两个列表。
-
-        没解析成功的行 timestamps/contents 对会跳过（写文件仍保留原文，不丢日志）。
-        """
         if not raw_lines:
             return [], []
         _, fpath = LogStorage._today_paths(container_name)
-
-        # 一次遍历：既拼写出串，又做 ts 解析（单遍最省 CPU）
         chunks: list[str] = []
         timestamps: list[str] = []
         contents: list[str] = []
@@ -77,7 +116,6 @@ class LogStorage:
             chunks.append(f"[{ts}] {content}\n")
             timestamps.append(ts)
             contents.append(content)
-
         if chunks:
             try:
                 with open(fpath, "a", encoding="utf-8", buffering=128 * 1024) as f:
@@ -103,7 +141,6 @@ class LogStorage:
             return ""
         try:
             if tail and tail > 0:
-                # 避免把 100MB 文件全读进来再切片；用 seek 从尾部找换行数
                 return LogStorage._read_tail(fpath, tail)
             with open(fpath, "r", encoding="utf-8", errors="replace") as f:
                 return f.read()
@@ -113,7 +150,6 @@ class LogStorage:
 
     @staticmethod
     def _read_tail(fpath: str, tail: int) -> str:
-        """高效 tail N 行：从文件末尾倒着读块，直到凑够 N 行"""
         avg_line_bytes_est = 200
         chunk = max(avg_line_bytes_est * tail, 8192)
         try:
@@ -134,7 +170,7 @@ class LogStorage:
                     buf = f.read(read_sz)
                     data = buf + data
                     newlines = data.count(b"\n")
-                    chunk *= 2     # 不够就加倍读下一次，减少循环次数
+                    chunk *= 2
                 lines = data.decode("utf-8", errors="replace").splitlines()
                 if len(lines) > tail:
                     lines = lines[-tail:]
@@ -145,11 +181,10 @@ class LogStorage:
 
     @staticmethod
     def cleanup_expired_files(days: int):
-        """清理过期日期的日志文件"""
         import shutil
         from datetime import timedelta
 
-        cutoff = date.today() - timedelta(days=days)
+        cutoff_date = today_local() - timedelta(days=days)
         base = Config.LOG_STORAGE_PATH
         if not os.path.isdir(base):
             return
@@ -162,9 +197,8 @@ class LogStorage:
                 if not fn.endswith(".log"):
                     continue
                 try:
-                    d_str = fn[:-4]
-                    d = date.fromisoformat(d_str)
-                    if d < cutoff:
+                    d = date.fromisoformat(fn[:-4])
+                    if d < cutoff_date:
                         os.remove(os.path.join(cdir, fn))
                         removed += 1
                 except Exception:

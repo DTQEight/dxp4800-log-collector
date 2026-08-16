@@ -1,7 +1,8 @@
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.config import Config
+from app.storage import iso_local, now_local   # 统一本地时区工具
 import logging
 import os
 import atexit
@@ -89,10 +90,10 @@ def init_db():
 
 
 def upsert_container(container_info: dict):
-    """批量容器也按单个写，量级小可接受"""
+    """批量容器也按单个写，量级小可接受；last_seen/first_seen 统一本地时区 iso"""
     with _db_lock:
         conn = _get_conn()
-        now = datetime.now().isoformat()
+        now = iso_local(now_local())
         conn.execute("""
             INSERT INTO containers (id, name, image, first_seen, last_seen)
             VALUES (?, ?, ?, ?, ?)
@@ -175,8 +176,9 @@ def search_logs(container_id=None, container_name=None, keyword=None,
 
 
 def cleanup_old_logs(days: int):
-    """清理N天前的旧日志（分批删，不占锁太久）"""
-    cutoff = datetime.fromtimestamp(datetime.now().timestamp() - days * 86400).isoformat()
+    """清理N天前的旧日志（按本地时区的截止点，分批删不占锁太久）"""
+    cutoff_dt = now_local().replace(microsecond=0) - timedelta(days=days)
+    cutoff = iso_local(cutoff_dt)
     total = 0
     with _db_lock:
         conn = _get_conn()
@@ -190,7 +192,7 @@ def cleanup_old_logs(days: int):
             if n < 5000:
                 break
     if total:
-        logger.info(f"清理旧日志: 删除 {total} 条记录")
+        logger.info(f"清理旧日志: 删除 {total} 条记录 (cutoff_local={cutoff})")
     try:
         with _db_lock:
             _get_conn().execute("PRAGMA wal_checkpoint(TRUNCATE)")

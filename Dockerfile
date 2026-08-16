@@ -8,8 +8,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai
 
-# 时区
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+# 时区：先安装 tzdata（slim 镜像不含 /usr/share/zoneinfo），再软链
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends tzdata ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+ && echo $TZ > /etc/timezone
 
 WORKDIR /app
 
