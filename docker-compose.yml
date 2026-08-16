@@ -1,48 +1,51 @@
 services:
   dxp4800-log-collector:
-    # 从 GitHub Container Registry 直接拉取（GitHub Actions 自动构建）
-    # 支持 linux/amd64（DXP4800 x86 版）和 linux/arm64
     image: ghcr.io/dtqeight/dxp4800-log-collector:latest
-    # 改成固定版本更稳，例如：
+    # 指定具体版本更稳（避免 latest 漂移），例如：
     # image: ghcr.io/dtqeight/dxp4800-log-collector:1.0.0
-    pull_policy: always          # 每次启动前检查 GHCR 有无新镜像；嫌慢可改成 missing
     container_name: dxp4800-log-collector
     restart: unless-stopped
+    # 嫌每次都检查镜像慢，可以删掉下面这行（只在本地没镜像时才拉）
+    pull_policy: always
     ports:
-      - "5000:5000"              # Web界面端口，可自行修改
+      - "5000:5000"   # Web界面端口，可自行修改
     environment:
       - TZ=Asia/Shanghai
-      # 可调参数：详见 .env.example
-      - LOG_RETENTION_DAYS=30
-      - COLLECT_INTERVAL_SEC=60
-      # Web登录密码建议修改（或放到 .env 里引用）
+      # Web 登录账号密码（建议修改）
       - WEB_USERNAME=admin
       - WEB_PASSWORD=ChangeMe123!
+      # 日志保留天数，超过会自动清理
+      - LOG_RETENTION_DAYS=30
+      # 每隔多少秒扫描一次容器并拉取增量日志
+      - COLLECT_INTERVAL_SEC=60
+      # 不需要收集日志的容器名（逗号分隔），默认排除自身
+      # - EXCLUDE_CONTAINERS=dxp4800-log-collector
     volumes:
-      # 必须：挂载Docker socket，才能读取宿主机（绿联NAS）上的所有容器日志
+      # 必须：挂载 Docker socket，才能读取 NAS 上所有容器的日志
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # 日志文件持久化：建议改为NAS上的绝对路径（如 /volume1/docker/dxp4800-logs）
+      # 日志文件归档目录（建议放到 NAS 共享盘绝对路径，如 /volume1/共享名/docker-logs）
       - ./logs:/app/logs
-      # 数据库持久化（存储日志元数据+索引）
+      # SQLite 索引数据库（存储搜索用元数据）
       - ./data:/app/data
+    # 健康检查：自动判断 Web 服务是否正常
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/login',timeout=3).read()"]
       interval: 60s
       timeout: 5s
       retries: 3
       start_period: 15s
+    # 资源限制（NAS 低功耗场景建议保留）
     mem_limit: 512m
     cpus: "1.0"
+    # 本工具自身的日志滚动策略，避免把 docker 自身的 json 日志撑爆
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
-# =====================================================
-# 【给想改成本地 build 的开发者的备份】
-# 把上面 image/pull_policy 注释掉，再取消下面 build 块的注释即可：
-# =====================================================
-#    build:
-#      context: .
-#      dockerfile: Dockerfile
+    # ======= 需要本地自己构建时，用下面两行替换上面 image: 那一行 =======
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    #   pull: true

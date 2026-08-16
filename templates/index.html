@@ -6,44 +6,152 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>
         * { box-sizing:border-box; }
-        body { margin:0; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:#f8fafc; color:#0f172a; display:flex; height:100vh; }
-        aside { width:280px; background:#1e293b; color:#f1f5f9; display:flex; flex-direction:column; }
-        aside h3 { margin:0; padding:20px 18px; background:#0f172a; font-size:16px; font-weight:600; border-bottom:1px solid #334155; }
+        :root {
+            --log-font-size: 13.5px;
+            --log-line-height: 1.65;
+            --pad: 12px;
+        }
+        html, body { height:100%; }
+        body {
+            margin:0;
+            font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+            background:#f8fafc; color:#0f172a;
+            display:flex; height:100vh; overflow:hidden;
+        }
+
+        /* ===== 左侧容器列表 ===== */
+        aside {
+            width:260px; min-width:260px;
+            background:#1e293b; color:#f1f5f9;
+            display:flex; flex-direction:column;
+        }
+        aside h3 {
+            margin:0; padding:14px 16px;
+            background:#0f172a; font-size:15px; font-weight:600;
+            border-bottom:1px solid #334155;
+            display:flex; align-items:center; justify-content:space-between;
+        }
         #container-list { flex:1; overflow:auto; }
-        .ctn { padding:10px 18px; cursor:pointer; border-left:3px solid transparent; display:flex; flex-direction:column; gap:2px; }
+        .ctn { padding:9px 16px; cursor:pointer; border-left:3px solid transparent; display:flex; flex-direction:column; gap:2px; }
         .ctn:hover { background:#334155; }
         .ctn.active { background:#334155; border-left-color:#22c55e; }
-        .ctn .n { font-size:14px; font-weight:500; word-break:break-all; }
-        .ctn .s { font-size:12px; opacity:.7; display:flex; justify-content:space-between; }
-        .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#64748b; margin-right:6px; }
+        .ctn .n { font-size:13.5px; font-weight:500; word-break:break-all; }
+        .ctn .s { font-size:11.5px; opacity:.75; display:flex; justify-content:space-between; }
+        .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#64748b; margin-right:6px; vertical-align:middle; }
         .status-dot.run { background:#22c55e; }
-        main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
-        header { padding:12px 20px; background:#fff; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-        header h2 { margin:0; font-size:16px; margin-right:auto; }
-        header input, header select { padding:7px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; }
-        header button { padding:7px 14px; border:1px solid #cbd5e1; background:#fff; border-radius:6px; cursor:pointer; font-size:13px; }
-        header button.primary { background:#2563eb; color:#fff; border-color:#2563eb; }
-        header button:hover { filter:brightness(.96); }
-        .tabs { display:flex; gap:16px; padding:0 20px; background:#fff; border-bottom:1px solid #e2e8f0; }
-        .tab { padding:10px 2px; font-size:13px; color:#64748b; cursor:pointer; border-bottom:2px solid transparent; }
-        .tab.active { color:#2563eb; border-color:#2563eb; }
-        .content { flex:1; overflow:hidden; display:flex; flex-direction:column; padding:12px 20px; gap:8px; }
-        .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-        textarea#log-view {
-            flex:1; width:100%; resize:none; background:#0f172a; color:#e2e8f0;
-            border:1px solid #334155; border-radius:8px; padding:12px; font-family:Consolas,Menlo,monospace;
-            font-size:12.5px; line-height:1.55;
+        a.logout { color:#94a3b8; text-decoration:none; font-size:12.5px; }
+
+        /* ===== 右侧主区 ===== */
+        main { flex:1; display:flex; flex-direction:column; min-width:0; }
+        header {
+            padding:8px 14px; background:#fff;
+            border-bottom:1px solid #e2e8f0;
+            display:flex; align-items:center; gap:8px; flex-wrap:wrap;
         }
-        .files-list { display:flex; flex-wrap:wrap; gap:8px; max-height:110px; overflow:auto; padding:8px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; }
-        .file-chip { padding:5px 10px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; font-size:12px; cursor:pointer; }
+        header h2 { margin:0; font-size:15px; margin-right:6px; flex:0 0 auto; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        header .spacer { flex:1; }
+        header input, header select { padding:6px 9px; border:1px solid #cbd5e1; border-radius:6px; font-size:12.5px; }
+        header input#kw { min-width:200px; }
+        header button { padding:6px 11px; border:1px solid #cbd5e1; background:#fff; border-radius:6px; cursor:pointer; font-size:12.5px; }
+        header button.primary { background:#2563eb; color:#fff; border-color:#2563eb; }
+        header button.danger  { background:#f87171; color:#fff; border-color:#f87171; }
+        header button:hover { filter:brightness(.96); }
+
+        .tabs {
+            display:flex; gap:14px;
+            padding:0 14px;
+            background:#fff;
+            border-bottom:1px solid #e2e8f0;
+            align-items:center;
+        }
+        .tab {
+            padding:8px 2px; font-size:13px; color:#64748b; cursor:pointer;
+            border-bottom:2px solid transparent;
+        }
+        .tab.active { color:#2563eb; border-color:#2563eb; }
+
+        /* ===== 预览区（核心扩大） ===== */
+        .content {
+            flex:1; min-height:0;
+            display:flex; flex-direction:column;
+            padding:8px 14px 14px 14px;
+            gap:8px;
+        }
+        .toolbar {
+            display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+            background:#fff; border:1px solid #e2e8f0; border-radius:8px;
+            padding:7px 10px;
+            transition: all .2s ease;
+        }
+        .toolbar.collapsed .files-list,
+        .toolbar.collapsed .file-chip { display:none; }
+        .toolbar .label { font-size:12.5px; color:#475569; margin-right:2px; }
+        .toolbar .grow { flex:1; }
+        .icon-btn {
+            padding:4px 8px; font-size:12px; border-radius:6px;
+            border:1px solid #cbd5e1; background:#fff; cursor:pointer;
+            color:#334155;
+        }
+        .icon-btn:hover { background:#f1f5f9; }
+
+        .files-list {
+            display:flex; flex-wrap:wrap; gap:6px;
+            max-height:72px; overflow:auto;
+            padding:4px;
+            flex:1 1 100%;
+            order:99;
+        }
+        .file-chip {
+            padding:4px 10px; background:#f1f5f9; border:1px solid #e2e8f0;
+            border-radius:16px; font-size:12px; cursor:pointer; white-space:nowrap;
+        }
+        .file-chip:hover { background:#e2e8f0; }
         .file-chip.active { background:#2563eb; color:#fff; border-color:#2563eb; }
-        a.logout { color:#94a3b8; text-decoration:none; font-size:13px; margin-left:8px; }
+
+        /* 预览 textarea 默认更大 */
+        .log-area {
+            flex:1; min-height:0; width:100%;
+            resize:none;
+            background:#0b1120; color:#e2e8f0;
+            border:1px solid #334155; border-radius:10px;
+            padding:14px 16px;
+            font-family:Consolas,Menlo,"JetBrains Mono","SF Mono",monospace;
+            font-size:var(--log-font-size); line-height:var(--log-line-height);
+            tab-size:4;
+            outline:none;
+        }
+        .log-area.wrap   { white-space: pre-wrap; word-break: break-word; }
+        .log-area.nowrap { white-space: pre; overflow-x:auto; }
+        #search-view {
+            background:#ffffff; color:#0f172a;
+            border:1px solid #e2e8f0;
+            font-size:var(--log-font-size); line-height:var(--log-line-height);
+        }
+
+        /* ===== 全屏模式 ===== */
+        body.fullscreen aside,
+        body.fullscreen header,
+        body.fullscreen .tabs { display:none !important; }
+        body.fullscreen main, body.fullscreen .content { padding:0 !important; }
+        body.fullscreen .log-area {
+            position:fixed; inset:0; z-index:9999;
+            border-radius:0; border:0; padding:20px 24px;
+            font-size:14.5px; line-height:1.7;
+        }
+        body.fullscreen .toolbar { display:none; }
+
         .empty { flex:1; display:flex; align-items:center; justify-content:center; color:#94a3b8; font-size:14px; }
+
+        /* 字体大小步进按钮 */
+        .font-size-tag { min-width:36px; text-align:center; font-variant-numeric:tabular-nums; font-size:12px; color:#334155; }
     </style>
 </head>
 <body>
 <aside>
-    <h3>🐳 容器列表 <a href="/logout" class="logout" style="float:right;font-weight:400;">退出</a></h3>
+    <h3>
+        🐳 容器列表
+        <a href="/logout" class="logout">退出</a>
+    </h3>
     <div id="container-list"></div>
 </aside>
 <main>
@@ -56,121 +164,184 @@
         <button onclick="liveTail()">📡 实时日志</button>
         <button onclick="exportCsv()">⬇ CSV</button>
         <button onclick="exportJson()">⬇ JSON</button>
+        <span class="spacer"></span>
+        <button class="icon-btn" title="全屏预览 (按 Esc 退出)" onclick="toggleFullscreen()">⛶ 全屏</button>
     </header>
+
     <div class="tabs">
-        <div class="tab active" data-tab="file" onclick="switchTab('file')">按日期文件</div>
-        <div class="tab" data-tab="search" onclick="switchTab('search')">数据库检索</div>
+        <div class="tab active" data-tab="file"   onclick="switchTab('file')">按日期文件</div>
+        <div class="tab"        data-tab="search" onclick="switchTab('search')">数据库检索</div>
     </div>
+
     <div class="content">
-        <div id="tab-file">
-            <div class="toolbar">
-                <span style="font-size:13px;color:#475569;">文件：</span>
-                <div class="files-list" id="files-list"><span style="color:#94a3b8;font-size:12px;">（暂无历史文件）</span></div>
+
+        <!-- ===== 按日期文件 Tab ===== -->
+        <div id="tab-file" style="flex:1;display:flex;flex-direction:column;min-height:0;gap:8px;">
+            <div class="toolbar" id="file-toolbar">
+                <span class="label">📅 文件</span>
+                <button class="icon-btn" onclick="toggleFileList()" title="折叠/展开文件列表">
+                    <span id="file-list-toggle-icon">▼</span>
+                    <span id="file-list-toggle-text">收起</span>
+                </button>
+                <button class="icon-btn" onclick="wrapToggle('log-view')" title="自动换行开关">↩ 换行</button>
+                <button class="icon-btn" onclick="zoomFont(-1)" title="字体减小">A-</button>
+                <span class="font-size-tag" id="font-size-tag">13.5</span>
+                <button class="icon-btn" onclick="zoomFont(+1)" title="字体增大">A+</button>
+                <button class="icon-btn" onclick="scrollToBottom()" title="跳到最新">⬇ 底部</button>
+                <button class="icon-btn" onclick="downloadCurrentFile()" title="下载当前日志文件">💾 下载</button>
+                <span class="grow"></span>
+                <button class="icon-btn" onclick="toggleFullscreen()" title="全屏">⛶ 全屏</button>
+                <div class="files-list" id="files-list">
+                    <span style="color:#94a3b8;font-size:12px;">（暂无历史文件，等待收集器写入）</span>
+                </div>
             </div>
-            <textarea id="log-view" readonly></textarea>
+            <textarea id="log-view" class="log-area nowrap" readonly></textarea>
         </div>
-        <div id="tab-search" style="display:none;flex:1;display:none;flex-direction:column;">
-            <textarea id="search-view" readonly style="flex:1;background:#fff;color:#0f172a;border:1px solid #e2e8f0;border-radius:8px;padding:12px;font-family:Consolas,Menlo,monospace;font-size:12.5px;line-height:1.6;resize:none;"></textarea>
+
+        <!-- ===== 数据库检索 Tab ===== -->
+        <div id="tab-search" style="flex:1;display:none;flex-direction:column;min-height:0;gap:8px;">
+            <div class="toolbar">
+                <span class="label">🔍 检索结果</span>
+                <button class="icon-btn" onclick="wrapToggle('search-view')" title="自动换行开关">↩ 换行</button>
+                <button class="icon-btn" onclick="zoomFont(-1)">A-</button>
+                <span class="font-size-tag" id="font-size-tag-2">13.5</span>
+                <button class="icon-btn" onclick="zoomFont(+1)">A+</button>
+                <span class="grow"></span>
+                <button class="icon-btn" onclick="toggleFullscreen()">⛶ 全屏</button>
+            </div>
+            <textarea id="search-view" class="log-area nowrap" readonly></textarea>
         </div>
     </div>
 </main>
 
 <script>
-let currentCid = null, currentName = null, currentFile = null, currentTab = 'file';
+let currentCid=null,currentName=null,currentFile=null,currentTab='file';
+const $ = id => document.getElementById(id);
 
-function $(id) { return document.getElementById(id); }
-
-async function loadContainers() {
+/* ---------------- 容器列表 ---------------- */
+async function loadContainers(){
     const resp = await fetch('/api/containers');
     const list = await resp.json();
-    const box = $('container-list');
-    box.innerHTML = '';
+    const box = $('container-list'); box.innerHTML='';
     list.forEach(c => {
-        const isRun = c.status === 'running';
+        const isRun = c.status==='running';
         const div = document.createElement('div');
-        div.className = 'ctn' + (c.id === currentCid ? ' active' : '');
+        div.className = 'ctn'+(c.id===currentCid?' active':'');
         div.innerHTML = `
             <div class="n">${c.name}</div>
             <div class="s"><span><span class="status-dot ${isRun?'run':''}"></span>${c.status}</span><span>${(c.image||'').split('/').pop()}</span></div>`;
-        div.onclick = () => selectContainer(c.id, c.name);
+        div.onclick = (e)=>{ e.stopPropagation(); selectContainer(c.id,c.name); };
         box.appendChild(div);
     });
 }
-
-function selectContainer(id, name) {
-    currentCid = id; currentName = name;
-    document.querySelectorAll('.ctn').forEach(e => e.classList.remove('active'));
+function selectContainer(id,name){
+    currentCid=id; currentName=name;
+    document.querySelectorAll('.ctn').forEach(e=>e.classList.remove('active'));
     event.currentTarget.classList.add('active');
     $('page-title').textContent = name;
-    if (currentTab === 'file') loadFiles();
+    if(currentTab==='file') loadFiles();
 }
 
-async function loadFiles() {
-    if (!currentName) return;
+/* ---------------- 文件列表 ---------------- */
+async function loadFiles(){
+    if(!currentName) return;
     const resp = await fetch(`/api/containers/${encodeURIComponent(currentName)}/files`);
     const { files } = await resp.json();
-    const box = $('files-list');
-    box.innerHTML = '';
-    if (!files.length) { box.innerHTML = '<span style="color:#94a3b8;font-size:12px;">（暂无历史文件，等待收集器写入）</span>'; $('log-view').value = ''; return; }
-    files.forEach(fn => {
+    const box = $('files-list'); box.innerHTML='';
+    if(!files.length){
+        box.innerHTML='<span style="color:#94a3b8;font-size:12px;">（暂无历史文件，等待收集器写入）</span>';
+        $('log-view').value=''; return;
+    }
+    files.forEach(fn=>{
         const chip = document.createElement('div');
-        chip.className = 'file-chip';
-        chip.textContent = fn;
-        chip.onclick = () => readFile(fn, chip);
+        chip.className='file-chip';
+        chip.textContent=fn;
+        chip.onclick=()=>readFile(fn,chip);
         box.appendChild(chip);
     });
     readFile(files[0], box.firstChild);
 }
-
-async function readFile(fn, chip) {
-    currentFile = fn;
-    document.querySelectorAll('.file-chip').forEach(e => e.classList.remove('active'));
-    if (chip) chip.classList.add('active');
+async function readFile(fn,chip){
+    currentFile=fn;
+    document.querySelectorAll('.file-chip').forEach(e=>e.classList.remove('active'));
+    if(chip) chip.classList.add('active');
     const resp = await fetch(`/api/containers/${encodeURIComponent(currentName)}/files/${fn}?format=text`);
     $('log-view').value = await resp.text();
-    $('log-view').scrollTop = $('log-view').scrollHeight;
+    scrollToBottom();
+}
+function downloadCurrentFile(){
+    if(!currentName||!currentFile){ alert('请先选择一个日志文件'); return; }
+    window.open(`/api/containers/${encodeURIComponent(currentName)}/files/${currentFile}?format=download`);
+}
+function toggleFileList(){
+    const tb = $('file-toolbar');
+    tb.classList.toggle('collapsed');
+    const collapsed = tb.classList.contains('collapsed');
+    $('file-list-toggle-icon').textContent = collapsed ? '▶' : '▼';
+    $('file-list-toggle-text').textContent = collapsed ? '展开' : '收起';
 }
 
-async function liveTail() {
-    if (!currentCid) { alert('请先选择容器'); return; }
-    const resp = await fetch(`/api/containers/${currentCid}/tail?n=500`);
-    $('log-view').value = await resp.text();
-    $('log-view').scrollTop = $('log-view').scrollHeight;
+/* ---------------- 实时 tail / 搜索 ---------------- */
+async function liveTail(){
+    if(!currentCid){ alert('请先选择容器'); return; }
     switchTab('file');
+    const resp = await fetch(`/api/containers/${currentCid}/tail?n=1000`);
+    $('log-view').value = await resp.text();
+    scrollToBottom();
 }
-
-function buildSearchParams(extra = {}) {
+function buildSearchParams(extra={}){
     const p = new URLSearchParams();
-    if (currentCid) p.set('container_id', currentCid);
-    const kw = $('kw').value.trim(); if (kw) p.set('keyword', kw);
-    const st = $('st').value; if (st) p.set('start_time', new Date(st).toISOString());
-    const et = $('et').value; if (et) p.set('end_time', new Date(et).toISOString());
-    p.set('limit', 500);
-    Object.entries(extra).forEach(([k,v]) => p.set(k, v));
+    if(currentCid) p.set('container_id', currentCid);
+    const kw = $('kw').value.trim(); if(kw) p.set('keyword', kw);
+    const st = $('st').value; if(st) p.set('start_time', new Date(st).toISOString());
+    const et = $('et').value; if(et) p.set('end_time',   new Date(et).toISOString());
+    p.set('limit', 2000);
+    Object.entries(extra).forEach(([k,v])=>p.set(k,v));
     return p;
 }
-
-async function searchLogs() {
+async function searchLogs(){
     switchTab('search');
-    const resp = await fetch('/api/logs/search?' + buildSearchParams().toString());
+    const resp = await fetch('/api/logs/search?'+buildSearchParams().toString());
     const rows = await resp.json();
-    $('search-view').value = rows.map(r => `[${r.timestamp}] [${r.container_name}] ${r.content}`).join('\n') || '（无匹配日志）';
+    $('search-view').value = rows.map(r=>`[${r.timestamp}] [${r.container_name}] ${r.content}`).join('\n') || '（无匹配日志）';
     $('search-view').scrollTop = 0;
 }
+function exportCsv(){ window.open('/api/logs/search?format=csv&'+buildSearchParams().toString()); }
+function exportJson(){ window.open('/api/logs/search?format=json_download&limit=10000&'+buildSearchParams().toString()); }
 
-function exportCsv() {
-    window.open('/api/logs/search?format=csv&' + buildSearchParams().toString());
-}
-function exportJson() {
-    window.open('/api/logs/search?format=json_download&limit=10000&' + buildSearchParams().toString());
+function switchTab(t){
+    currentTab=t;
+    document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('active', e.dataset.tab===t));
+    $('tab-file').style.display   = t==='file'   ? 'flex' : 'none';
+    $('tab-search').style.display = t==='search' ? 'flex' : 'none';
+    if(t==='file' && currentName) loadFiles();
 }
 
-function switchTab(t) {
-    currentTab = t;
-    document.querySelectorAll('.tab').forEach(e => e.classList.toggle('active', e.dataset.tab === t));
-    $('tab-file').style.display = t === 'file' ? 'flex' : 'none';
-    $('tab-search').style.display = t === 'search' ? 'flex' : 'none';
+/* ---------------- 界面体验工具函数 ---------------- */
+let fontSize = 13.5;
+function zoomFont(delta){
+    fontSize = Math.max(11, Math.min(20, +(fontSize + delta).toFixed(1)));
+    document.documentElement.style.setProperty('--log-font-size', fontSize+'px');
+    const tag = $('font-size-tag'); if(tag) tag.textContent = fontSize;
+    const tag2 = $('font-size-tag-2'); if(tag2) tag2.textContent = fontSize;
 }
+function wrapToggle(id){
+    const el = $(id);
+    const wasWrap = el.classList.contains('wrap');
+    el.classList.toggle('wrap', !wasWrap);
+    el.classList.toggle('nowrap', wasWrap);
+}
+function scrollToBottom(){
+    const ta = currentTab==='file' ? $('log-view') : $('search-view');
+    ta.scrollTop = ta.scrollHeight;
+}
+function toggleFullscreen(){
+    document.body.classList.toggle('fullscreen');
+}
+document.addEventListener('keydown', (e)=>{
+    if(e.key==='Escape' && document.body.classList.contains('fullscreen')) toggleFullscreen();
+    if((e.ctrlKey||e.metaKey) && e.key==='f') { e.preventDefault(); toggleFullscreen(); }
+});
 
 loadContainers();
 setInterval(loadContainers, 30000);
