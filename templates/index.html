@@ -17,6 +17,10 @@
             background:#f8fafc; color:#0f172a;
             display:flex; height:100vh; overflow:hidden;
         }
+        .icon-btn.tail-btn.active {
+            background:#2563eb; border-color:#2563eb; color:#fff;
+            box-shadow: 0 1px 2px rgba(37,99,235,.35);
+        }
 
         /* ===== 左侧容器列表 ===== */
         aside {
@@ -175,12 +179,20 @@
                     <span id="file-list-toggle-icon">▼</span>
                     <span id="file-list-toggle-text">收起</span>
                 </button>
+                <span class="label" style="margin-left:4px;">最近</span>
+                <div id="tail-buttons" style="display:inline-flex;gap:4px;">
+                    <button class="icon-btn tail-btn active" data-tail="20"    onclick="setTail(20)">20</button>
+                    <button class="icon-btn tail-btn"        data-tail="100"   onclick="setTail(100)">100</button>
+                    <button class="icon-btn tail-btn"        data-tail="500"   onclick="setTail(500)">500</button>
+                    <button class="icon-btn tail-btn"        data-tail="2000"  onclick="setTail(2000)">2000</button>
+                    <span class="font-size-tag" id="tail-tag" style="background:#e2e8f0;border-radius:6px;padding:2px 4px;">默认 20</span>
+                </div>
                 <button class="icon-btn" onclick="wrapToggle('log-view')">↩ 换行</button>
                 <button class="icon-btn" onclick="zoomFont(-1)">A-</button>
                 <span class="font-size-tag" id="font-size-tag">13.5</span>
                 <button class="icon-btn" onclick="zoomFont(+1)">A+</button>
                 <button class="icon-btn" onclick="scrollToBottom()">⬇ 底部</button>
-                <button class="icon-btn" id="btn-full-file" onclick="loadFullFile()" title="当前只显示最后5000行，点此加载全文">📄 全文预览</button>
+                <button class="icon-btn" id="btn-full-file" onclick="loadFullFile()" title="忽略 tail 档位，加载整篇日志文件">📄 全文预览</button>
                 <button class="icon-btn" onclick="downloadCurrentFile()">💾 下载</button>
                 <div class="files-list" id="files-list">
                     <span style="color:#94a3b8;font-size:12px;">（暂无历史文件，等待收集器写入）</span>
@@ -208,6 +220,7 @@
 let currentCid=null,currentName=null,currentFile=null,currentFileSize=0,currentTab='file';
 let lastLiveTailPromise = null;
 let lastLiveAbort = null;
+let currentTail = 20;   // 默认只预览最近20条，快速切换不卡
 
 /* -------- 内存缓存：避免来回切换重复 HTTP -------- */
 const fileTextCache = new Map();   // key = "name|filename|tail" -> Promise<string>
@@ -265,7 +278,7 @@ function fmtSize(b){
 function showLoading(id, text){
     const ta = $(id);
     ta.classList.add('loading');
-    ta.value = '⏳ ' + text + '\n（切换大文件时首次读取请稍候，默认只显示最后5000行）';
+    ta.value = '⏳ ' + text + `\n（默认只显示最近 ${currentTail} 条，点击上方 20/100/500/2000 档位可切换；要看全文点「📄全文预览」）`;
 }
 /* 大字符串分块写入 textarea，避免一次性赋值导致 DOM 锁死 */
 function setTextareaChunked(id, fullText){
@@ -309,7 +322,7 @@ async function loadFiles(){
             const size = typeof f==='string' ? 0 : (f.size||0);
             const big  = size > 5*1024*1024;
             chip.className = 'file-chip'+(big?' big':'');
-            chip.title = big ? '文件较大（>5MB）：默认只预览最后5000行' : '';
+            chip.title = big ? `文件较大（>5MB）：默认预览最近 ${currentTail} 条，要看全文点「📄全文预览」` : '';
             chip.innerHTML = `<span>${name}</span>` + (size?`<span class="sz">${fmtSize(size)}</span>`:'');
             chip.onclick = ()=>readFile(name, chip, size);
             box.appendChild(chip);
@@ -330,16 +343,15 @@ async function readFile(fn, chip, size){
     $('btn-full-file').textContent = (currentFileSize > 5*1024*1024) ? '📄 加载全文（慢）' : '📄 全文预览';
 
     // 命中缓存直接用，不再请求
-    const cacheKey = `${currentName}|${fn}|5000`;
+    const cacheKey = `${currentName}|${fn}|${currentTail}`;
     let p = fileTextCache.get(cacheKey);
     if(!p){
-        showLoading('log-view', `正在读取 ${fn}${size?`（${fmtSize(size)}）`:''}…`);
+        showLoading('log-view', `正在读取 ${fn}${size?`（${fmtSize(size)}）`:''} 的最近 ${currentTail} 条…`);
         const ctrl = new AbortController();
         lastLiveAbort = ctrl;
         p = (async ()=>{
             try {
-                // 默认 tail=5000，不加载全文
-                const url = `/api/containers/${encodeURIComponent(currentName)}/files/${encodeURIComponent(fn)}?tail=5000`;
+                const url = `/api/containers/${encodeURIComponent(currentName)}/files/${encodeURIComponent(fn)}?tail=${currentTail}`;
                 const r = await fetch(url, { signal: ctrl.signal });
                 return await r.text();
             } catch(err){
@@ -351,21 +363,35 @@ async function readFile(fn, chip, size){
     }
     try {
         const text = await p;
-        setTextareaChunked('log-view', text || '（该文件为空）');
+        setTextareaChunked('log-view', text || `（${currentTail==0?'全文':`最近 ${currentTail} 条`}为空）`);
     } catch(e){
         $('log-view').classList.remove('loading');
         $('log-view').value = '❌ 读取失败：'+e.message;
     }
 }
+function setTail(n){
+    n = Number(n)||0;
+    currentTail = n;
+    document.querySelectorAll('.tail-btn').forEach(b=>{
+        b.classList.toggle('active', Number(b.dataset.tail)===n);
+    });
+    const tag = $('tail-tag');
+    if(tag) tag.textContent = (n===0 ? '全文' : `${n} 条`);
+    // 立刻重新拉当前文件（有缓存就走缓存）
+    if(currentFile){
+        // 清掉同一文件旧档位的提示，用最新档位重拉
+        const activeChip = document.querySelector('.file-chip.active');
+        readFile(currentFile, activeChip || null, currentFileSize);
+    }
+}
 async function loadFullFile(){
     if(!currentName||!currentFile){ alert('请先选择一个日志文件'); return; }
-    if(!confirm(`确定加载全文？\n\n文件：${currentFile}\n大小：${fmtSize(currentFileSize)}\n\n超过10MB会有明显卡顿，建议直接"💾下载"后本地看。`)) return;
+    if(!confirm(`确定加载全文？\n\n文件：${currentFile}\n大小：${fmtSize(currentFileSize)}\n\n默认只看最近 ${currentTail} 条（切档位不会卡顿），超过10MB建议直接"💾下载"后本地看。`)) return;
     showLoading('log-view', `正在加载全文 ${currentFile}…`);
     try {
         const url = `/api/containers/${encodeURIComponent(currentName)}/files/${encodeURIComponent(currentFile)}?full=1`;
         const r = await fetch(url);
         const text = await r.text();
-        // 全文缓存
         cachePut(fileTextCache, `${currentName}|${currentFile}|full`, Promise.resolve(text));
         setTextareaChunked('log-view', text);
     } catch(e){
