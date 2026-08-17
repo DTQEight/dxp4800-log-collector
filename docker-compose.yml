@@ -38,6 +38,8 @@ services:
       - WECHAT_WORK_COOLDOWN_SEC=60
       # 可选：只监控指定容器（逗号分隔，留空=全部容器），如 go2rtc,frpc
       # - WECHAT_WORK_INCLUDE_CONTAINERS=
+      # 可选：首次启动时，N天前的历史错误日志要不要也推送？false=只推新错误（推荐），true=老错误也推
+      - WECHAT_WORK_NOTIFY_ON_INIT=false
       # 可选：HTTP 代理（NAS 不能直连公网时使用），如 http://192.168.31.1:7890
       # - WECHAT_WORK_PROXY_URL=
     volumes:

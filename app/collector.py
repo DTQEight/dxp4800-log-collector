@@ -107,10 +107,11 @@ class LogCollector:
 
             # 增量拉日志：用 "since"，但首跑也只给最后 MAX_LOG_LINES_PER_TICK 行
             since = self._container_last_since.get(cid)
+            initial_pull = since is None   # since=None → 首次全量历史拉取
             try:
                 raw_logs = self.docker.get_container_logs(
                     cid,
-                    tail="all" if since is None else 0,
+                    tail="all" if initial_pull else 0,
                     since=int(since) if since else None,
                 )
             except Exception as e:
@@ -120,7 +121,7 @@ class LogCollector:
             if raw_logs:
                 lines = raw_logs.splitlines()
                 n_in = len(lines)
-                lines = self._dedupe_and_feed(cid, cname, "pull", lines)
+                lines = self._dedupe_and_feed(cid, cname, "pull", lines, initial_pull=initial_pull)
                 if lines or n_in:
                     logger.debug(f"[{cname}] tick 拉 {n_in} 行，写入 {lines} 条（批量缓冲中）")
 
@@ -151,7 +152,8 @@ class LogCollector:
                     if self._stop_event.is_set():
                         break
                     # 单行直接丢进缓冲（flush 时才批量 open/insert）
-                    self._dedupe_and_feed(container_id, container_name, "stream", [line])
+                    # stream 永远是实时，initial_pull=False，错误永远会触发通知
+                    self._dedupe_and_feed(container_id, container_name, "stream", [line], initial_pull=False)
             except Exception as e:
                 logger.debug(f"[{container_name}] 日志流中断: {e}, {backoff}s后重试")
                 time.sleep(backoff)
@@ -169,11 +171,21 @@ class LogCollector:
         raw = f"{cid}|{ts}|{content[:200]}".encode("utf-8")
         return hashlib.md5(raw, usedforsecurity=False).hexdigest()
 
-    def _dedupe_and_feed(self, cid, cname, source, lines):
-        """解析+去重+进缓冲。返回：实际写入缓冲的条数"""
+    def _dedupe_and_feed(self, cid, cname, source, lines, initial_pull: bool = False):
+        """解析+去重+进缓冲。返回：实际写入缓冲的条数
+
+        Args:
+            initial_pull: True 表示这是"首次启动全量拉历史"的结果，默认不触发
+                企业微信错误通知（否则首次启动会收到一堆 N 天前的老错误）。
+                可通过 WECHAT_WORK_NOTIFY_ON_INIT=true 改成"老错误也通知"。
+        """
         if not lines:
             return 0
         written = 0
+        # 是否允许这一轮触发错误通知：
+        # - 增量/流：永远允许
+        # - 首次全量拉历史：只在 WECHAT_WORK_NOTIFY_ON_INIT=true 时允许
+        allow_notify = (not initial_pull) or Config.WECHAT_WORK_NOTIFY_ON_INIT
         # 本轮命中的第一条错误日志（用于通知正文）；同一轮里多条同类只取首条做样本
         first_error: tuple[str, str] | None = None   # (ts_iso, content)
         # 先一次性把所有行解析好（单遍，避免重复 parse）
@@ -194,7 +206,7 @@ class LogCollector:
                 written += 1
 
                 # 错误日志检测（在锁内只做轻量的字符串包含判断，不发 IO）
-                if first_error is None and self._is_error_line(cname, content):
+                if allow_notify and first_error is None and self._is_error_line(cname, content):
                     first_error = (ts, content)
 
             # 超过批量阈值就触发 flush（但在 flush_loop 里执行更稳，这里只做 hint）

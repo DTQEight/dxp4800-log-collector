@@ -119,3 +119,7 @@ class Config:
         for c in os.getenv("WECHAT_WORK_INCLUDE_CONTAINERS", "").split(",")
         if c.strip()
     ]
+    # 首次启动时，拉到的历史日志里的错误是否也发通知
+    #   true  = 老错误也报（排障时可能有用，但首次启动容易收到一堆老日志）
+    #   false = 只报"本次启动之后新产生"的错误（默认，符合直觉）
+    WECHAT_WORK_NOTIFY_ON_INIT = _bool("WECHAT_WORK_NOTIFY_ON_INIT", False)
