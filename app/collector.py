@@ -70,6 +70,12 @@ class LogCollector:
                     Config.DOCKER_CONTAINERS_PATH,
                 )
 
+        # 公开一个"立即flush"开关：前端/用户点手动触发时可以让磁盘立刻写入。
+        # 必须在 __init__ 里初始化（不能在 run_foreground 里），
+        # 因为 _flush_thread 启动后会立即访问 _poke_flush_event，
+        # 如果此时还没初始化 → AttributeError → flush线程崩溃 → 日志永远写不进磁盘
+        self._poke_flush_event = threading.Event()
+
     # ---------------- 主循环 ----------------
     def run_foreground(self):
         logger.info(
@@ -80,10 +86,6 @@ class LogCollector:
         )
         self._flush_thread = threading.Thread(target=self._flush_loop, name="log-flush", daemon=True)
         self._flush_thread.start()
-
-        # 公开一个"立即flush"开关：前端/用户点手动触发时可以让磁盘立刻写入，
-        # 解决"看起来一分钟才更新一次"的观感问题。
-        self._poke_flush_event = threading.Event()
 
         try:
             while not self._stop_event.is_set():
