@@ -250,11 +250,11 @@
                 <span class="label" style="margin-left:6px;">🔄 自动刷新</span>
                 <div id="auto-buttons" style="display:inline-flex;gap:4px;">
                     <button class="icon-btn auto-btn" data-sec="0"    onclick="setAuto(0)">关</button>
-                    <button class="icon-btn auto-btn" data-sec="3"    onclick="setAuto(3)">3s</button>
+                    <button class="icon-btn auto-btn active" data-sec="3"    onclick="setAuto(3)">3s</button>
                     <button class="icon-btn auto-btn" data-sec="10"   onclick="setAuto(10)">10s</button>
                     <button class="icon-btn auto-btn" data-sec="30"   onclick="setAuto(30)">30s</button>
-                    <button class="icon-btn auto-btn active" data-sec="-1"   onclick="setAuto(-1)" title="真正实时（长连接 SSE，需后端 STREAM_ENABLED=true）">实时</button>
-                    <span class="font-size-tag" id="auto-tag" style="background:#e2e8f0;border-radius:6px;padding:2px 4px;">实时</span>
+                    <button class="icon-btn auto-btn" data-sec="-1"   onclick="setAuto(-1)" title="真正实时（长连接 SSE，需后端 STREAM_ENABLED=true）">实时</button>
+                    <span class="font-size-tag" id="auto-tag" style="background:#e2e8f0;border-radius:6px;padding:2px 4px;">3s</span>
                 </div>
                 <button class="icon-btn" id="btn-force-sync" onclick="forceSyncNow()" title="立刻调用 docker daemon 拉最新日志并强制刷盘（解决"看起来一分钟才更新"的兜底）">⚡ 立即同步</button>
                 <button class="icon-btn" onclick="wrapToggle('log-view')">↩ 换行</button>
@@ -312,7 +312,13 @@ let lastLiveAbort = null;
 let currentTail = 20;   // 默认只预览最近20条，快速切换不卡
 
 /* -------- 自动刷新状态 -------- */
-let autoMode = -1;      // 0=关, 正整数=秒数轮询, -1=SSE长连接实时（默认实时，需后端 STREAM_ENABLED=true）
+let autoMode = 3;      // 0=关, 正整数=秒数轮询, -1=SSE长连接实时
+// STREAM_ENABLED=false 时默认3s轮询（不依赖SSE）；true时才默认实时
+{% if not stream_enabled %}
+autoMode = 3;
+{% else %}
+autoMode = -1;
+{% endif %}
 let autoTimer = 0;
 let autoBytesOffset = null;   // 上次读到的文件字节长度，用于 from_bytes 增量
 let autoSse = null;          // EventSource 实例（实时模式下）
@@ -375,6 +381,8 @@ function selectContainer(id,name){
     }
     // 让 UI 先刷一次，再异步取数据（关键：不阻塞点击反馈）
     if(currentTab==='file') setTimeout(loadFiles, 0);
+    // 轮询模式：加载完文件后启动定时刷新
+    if(autoMode > 0) startAutoRuntimeIfNeeded();
 }
 
 /* ---------------- 工具函数：Loading / 分片赋值 ---------------- */

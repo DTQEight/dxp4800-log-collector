@@ -64,7 +64,7 @@ def create_app() -> Flask:
     @app.route("/")
     @login_required
     def index():
-        return render_template("index.html")
+        return render_template("index.html", stream_enabled=Config.STREAM_ENABLED)
 
     # ---------- API: 容器 ----------
     @app.route("/api/containers")
