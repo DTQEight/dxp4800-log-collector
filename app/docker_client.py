@@ -219,3 +219,41 @@ def strip_docker_log_headers(text: str) -> str:
             out.append(raw[i : j + 1].decode("utf-8", errors="replace"))
             i = j + 1
     return "".join(out)
+
+
+def clean_raw_log_lines(text: str) -> str:
+    """对 /tail API 返回的原始 Docker 日志做清洗（让前端看到的和归档文件一致）：
+
+    1. 剥 8 字节帧头（非 TTY 容器）
+    2. 逐行处理：剥 Docker UTC 前缀 → 转本地时区 → 剥 ANSI 颜色码 → 剥应用重复时间戳
+    3. 没识别到 Docker 前缀的行原样保留（仅剥 ANSI）
+
+    这样前端不管是看归档文件还是 /tail 直拉，显示格式都统一干净。
+    """
+    if not text:
+        return text
+    # 延迟导入避免循环引用
+    from app.storage import (
+        TIMESTAMP_PATTERN, ANSI_PATTERN, APP_TS_PATTERN,
+        parse_timestamp_to_local, iso_local, now_local, strip_ansi,
+    )
+
+    text = strip_docker_log_headers(text)
+    out_lines: list[str] = []
+    for line in text.splitlines():
+        if not line:
+            continue
+        content = line
+        ts_local = None
+        m = TIMESTAMP_PATTERN.match(line)
+        if m:
+            ts_raw, content = m.group(1), m.group(2)
+            ts_local = parse_timestamp_to_local(ts_raw)
+        # 剥 ANSI + 应用重复时间戳
+        content = strip_ansi(content).lstrip()
+        content = APP_TS_PATTERN.sub("", content, count=1).lstrip()
+        if ts_local is not None:
+            out_lines.append(f"[{iso_local(ts_local)}] {content}")
+        else:
+            out_lines.append(content)
+    return "\n".join(out_lines) + ("\n" if out_lines else "")

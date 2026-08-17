@@ -11,7 +11,29 @@ TIMESTAMP_PATTERN = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[\.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s(.*)$",
     re.DOTALL,
 )
+
+# ANSI 颜色码（go2rtc / 很多 Go/Node 应用会输出 \x1b[90m...\x1b[0m）
+ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
+
+# 应用自己打的时间戳（剥掉 ANSI 后检测），匹配常见格式：
+#   09:29:50.797          → 纯时间（带可选毫秒）
+#   2026-08-17 09:29:50   → 日期+时间
+#   2026/08/17 09:29:50   → 斜杠日期+时间
+#   Aug 17 09:29:50       → syslog 风格
+APP_TS_PATTERN = re.compile(
+    r"^(?:"
+    r"\d{4}[-/]\d{1,2}[-/]\d{1,2}[\sT]\d{2}:\d{2}:\d{2}(?:[\.,]\d+)?"
+    r"|\d{2}:\d{2}:\d{2}(?:[\.,]\d+)?"
+    r"|[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}"
+    r")\s*"
+)
+
 _TODAY_CACHE = (None, "", "")  # (date_obj, dir_path, file_path)
+
+
+def strip_ansi(text: str) -> str:
+    """剥掉 ANSI 颜色码，让日志更干净"""
+    return ANSI_PATTERN.sub("", text) if text else text
 
 
 def now_local() -> datetime:
@@ -78,7 +100,7 @@ class LogStorage:
 
     @staticmethod
     def _parse_line(raw_line: str):
-        """(ts_local_iso, content)"""
+        """(ts_local_iso, content) — 剥掉 Docker UTC 前缀 + ANSI 颜色码 + 应用重复时间戳"""
         raw_line = raw_line.rstrip("\r\n")
         if not raw_line:
             return None, None
@@ -91,6 +113,12 @@ class LogStorage:
         if ts_local is None:
             # 没 Docker 时间戳（比如 TTY/应用自己打了但格式不匹配）→ 用当前本地时间兜底
             ts_local = now_local()
+
+        # 剥 ANSI 颜色码（go2rtc 等应用输出 \x1b[90m...\x1b[0m 包裹时间戳）
+        content = strip_ansi(content).lstrip()
+        # 检测应用自己打的时间戳，如果有就剥掉（避免和我们的 [ts] 前缀重复显示）
+        content = APP_TS_PATTERN.sub("", content, count=1).lstrip()
+
         return iso_local(ts_local), content
 
     @staticmethod

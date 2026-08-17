@@ -190,6 +190,9 @@ def create_app() -> Flask:
         if use_sse and Config.STREAM_ENABLED:
             return _tail_sse(cid_or_name, n)
         text = DockerClient().get_container_logs(cid_or_name, tail=n) or ""
+        # 清洗原始日志：剥 Docker UTC 前缀(转本地时区) + ANSI 颜色码 + 应用重复时间戳
+        from app.docker_client import clean_raw_log_lines
+        text = clean_raw_log_lines(text)
         # /tail 的响应也顺手返回 X-Collect-Now，让前端知道"我刚刚触发了收集"
         headers = {}
         try:
