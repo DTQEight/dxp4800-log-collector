@@ -12,17 +12,15 @@ def _bool(name, default: bool) -> bool:
 
 
 def _resolve_tz(name: str):
-    """解析 LOCAL_TZ 为 zoneinfo.ZoneInfo（优先）或固定偏移，兜底 UTC+8（Asia/Shanghai）。"""
+    """解析时区名为 ZoneInfo 或固定偏移，兜底 UTC+8。"""
     try:
-        from zoneinfo import ZoneInfo, available_timezones
+        from zoneinfo import ZoneInfo
     except Exception:
-        ZoneInfo = None; available_timezones = set()
+        ZoneInfo = None
 
-    name = (name or "").strip()
-    if not name:
-        name = "Asia/Shanghai"
+    name = (name or "").strip() or "Asia/Shanghai"
 
-    if ZoneInfo is not None and (name in available_timezones() or True):
+    if ZoneInfo is not None:
         try:
             return ZoneInfo(name)
         except Exception:
@@ -32,14 +30,14 @@ def _resolve_tz(name: str):
         sign = 1
         if name.startswith("-"): sign = -1; name = name[1:]
         elif name.startswith("+"): name = name[1:]
-        for prefix in ("UTC","GMT"):
+        for prefix in ("UTC", "GMT"):
             if name.upper().startswith(prefix): name = name[len(prefix):]
         h = m = 0
         if ":" in name:
             h_s, m_s = name.split(":", 1); h = int(h_s); m = int(m_s)
         else:
             h = int(float(name))
-        return timezone(timedelta(hours=sign*h, minutes=sign*m))
+        return timezone(timedelta(hours=sign * h, minutes=sign * m))
     except Exception:
         return timezone(timedelta(hours=8), "CST")
 

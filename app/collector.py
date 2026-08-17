@@ -99,14 +99,13 @@ class LogCollector:
                 wait_s = max(0.5, Config.COLLECT_INTERVAL_SEC - elapsed)
                 self._stop_event.wait(wait_s)
         finally:
-            try: self._flush(force=True)
+            try: self._flush()
             except Exception as e: logger.warning(f"最后flush出错: {e}")
             logger.info("日志收集器退出")
 
     def request_immediate_flush(self):
         """外部（如 Web API）可调用：下一个 flush_loop tick 立刻刷盘刷库"""
         self._poke_flush_event.set()
-        self._collect_once_weak = getattr(self, '_collect_once_weak', None)  # noqa
 
     def stop(self):
         self._stop_event.set()
@@ -444,33 +443,16 @@ class LogCollector:
         except Exception as e:
             logger.error(f"企业微信通知异常: {e}")
 
-    # ---------------- flush 线程（核心：每 N 秒 / 超过条数 批量落盘） ----------------
+    # ---------------- flush 线程 ----------------
     def _flush_loop(self):
+        """每 BATCH_FLUSH_SEC 秒或被 poke 时批量落盘。"""
         while not self._stop_event.is_set():
-            tick_sec = 0.3
-            slept = 0.0
-            triggered = False
-            while not self._stop_event.is_set():
-                with self._buf_lock:
-                    pending = len(self._db_rows)
-                elapsed = time.monotonic() - self._last_flush_ts
-                # 三种触发条件任一命中：到时间 / 条数满 / 外部 poke（request_immediate_flush）
-                if elapsed >= Config.BATCH_FLUSH_SEC or pending >= Config.BATCH_MAX_ENTRIES:
-                    triggered = True; break
-                if self._poke_flush_event.is_set():
-                    # 外部 poke：等 0.5s 再刷，防止用户每 0.1s 点一下就刷一次
-                    self._poke_flush_event.clear()
-                    triggered = True
-                    time.sleep(0.5)
-                    break
-                time.sleep(tick_sec)
-                slept += tick_sec
-                if slept > Config.BATCH_FLUSH_SEC + 5:
-                    triggered = True; break
-            self._flush(force=not triggered)
+            self._poke_flush_event.wait(timeout=Config.BATCH_FLUSH_SEC)
+            self._poke_flush_event.clear()
+            time.sleep(0.3)  # 合并连续 poke，避免频繁刷盘
+            self._flush()
 
-    def _flush(self, force: bool):
-        # 拿锁，瞬间把缓冲区 swap 到局部变量，不阻塞收集线程太久
+    def _flush(self):
         with self._buf_lock:
             buf = self._line_buffers
             db_rows = self._db_rows
@@ -485,7 +467,6 @@ class LogCollector:
         total_lines_written = 0
         total_rows = len(db_rows)
 
-        # 1) 写文件（按容器分桶，每个文件一次 open/write/close）
         for cname, raw_lines in buf.items():
             if not raw_lines:
                 continue
@@ -495,7 +476,6 @@ class LogCollector:
             except Exception as e:
                 logger.error(f"[{cname}] 批量写文件失败: {e}")
 
-        # 2) 写 DB（单次 executemany + 事务）
         if db_rows:
             try:
                 models.insert_log_entries(db_rows)

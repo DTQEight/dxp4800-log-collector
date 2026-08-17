@@ -121,109 +121,64 @@ class DockerClient:
                 if not chunk:
                     continue
                 if isinstance(chunk, str):
-                    # TTY 容器直接是文本
-                    leftover = _emit_text(leftover + chunk.encode("utf-8", errors="replace"))
-                    continue
+                    chunk = chunk.encode("utf-8", errors="replace")
                 buf = leftover + chunk
                 # 逐帧解：8 bytes header -> [1 stream][3 pad][4 size big-endian]
                 while len(buf) >= 8:
-                    try:
-                        _, _, frame_len = struct.unpack(">B B I", buf[:8])
-                    except struct.error:
-                        break
-                    total = 8 + frame_len
-                    if len(buf) < total:
-                        break
-                    payload = buf[8:total]
-                    buf = buf[total:]
-                    # payload 内含 \n，拆成多行吐出
-                    leftover = _emit_text(payload, head=leftover, return_leftover=True)
+                    if buf[0] in (1, 2) and buf[1] == 0 and buf[2] == 0 and buf[3] == 0:
+                        frame_len = struct.unpack(">I", buf[4:8])[0]
+                        total = 8 + frame_len
+                        if len(buf) < total:
+                            break
+                        payload = buf[8:total]
+                        buf = buf[total:]
+                        for line in payload.decode("utf-8", errors="replace").splitlines():
+                            if line:
+                                yield line
+                    else:
+                        # 非 Docker 帧头（TTY 容器），按 \n 拆行
+                        nl = buf.find(b"\n")
+                        if nl == -1:
+                            break
+                        line = buf[:nl].decode("utf-8", errors="replace")
+                        if line:
+                            yield line
+                        buf = buf[nl + 1:]
                 leftover = buf
         except GeneratorExit:
             return
         except Exception as e:
             logger.debug(f"日志流解码异常: {e}")
-            # 把 leftover 以文本形式吐出来，不要丢
             if leftover:
                 for line in leftover.decode("utf-8", errors="replace").splitlines():
-                    if line: yield line
-
-
-def _emit_text(buf: bytes, head: bytes = b"", return_leftover=False):
-    """把 buf 里能拼的整行 yield 出来，返回残留的半行（未换行）bytes。"""
-    # 这个函数把"拼接 + 解码 + 拆行"合并，减少一次 splitlines 拷贝
-    if not buf and not head:
-        return b"" if return_leftover else None
-    full = head + buf
-    try:
-        text = full.decode("utf-8", errors="replace")
-    except Exception:
-        return full if return_leftover else None
-    if not text:
-        return b"" if return_leftover else None
-    # text 末尾是否以 \n 结尾，决定是否有 leftover
-    if text.endswith("\n"):
-        lines = text.splitlines()
-        for ln in lines:
-            if ln: yield ln
-        return b"" if return_leftover else None
-    # 不以 \n 结尾：最后一段是半行先存着
-    idx = text.rfind("\n")
-    if idx == -1:
-        # 完全没有换行：全部进 leftover
-        leftover_text = text
-        lines: list[str] = []
-    else:
-        lines = text[:idx].splitlines()
-        for ln in lines:
-            if ln: yield ln
-        leftover_text = text[idx + 1 :]
-    if return_leftover:
-        return leftover_text.encode("utf-8", errors="replace")
-    return None
+                    if line:
+                        yield line
 
 
 def strip_docker_log_headers(text: str) -> str:
-    """
-    对一次性 get_container_logs(stream=False) 的文本兜底去除帧头。
-    非 TTY 容器里 docker SDK 返回的文本，每行前面可能带不可见的 8 字节头，
-    直接写进日志会污染内容 + 正则解析多花 CPU。
-    """
+    """对 get_container_logs(stream=False) 的文本去除 8 字节帧头（非 TTY 容器）。"""
     if not text:
         return text
-    # 用前 32 字符快速判断：是否含控制字符（'\x01'/'\x02' + 后跟 0x00）
     sample = text[:64]
     if "\x01" not in sample and "\x02" not in sample:
-        return text   # 大概率 TTY，不用处理
-    try:
-        raw = text.encode("utf-8", errors="replace")
-    except Exception:
-        return text
+        return text  # TTY 容器，无需处理
+    raw = text.encode("utf-8", errors="replace")
     out: list[str] = []
-    i = 0
-    n = len(raw)
+    i, n = 0, len(raw)
     while i < n:
         if i + 8 <= n and raw[i] in (1, 2) and raw[i + 1] == 0 and raw[i + 2] == 0 and raw[i + 3] == 0:
-            try:
-                frame_len = struct.unpack(">I", raw[i + 4 : i + 8])[0]
-            except struct.error:
-                # 不正常，向后跳 1 字节继续找
-                i += 1
-                continue
-            end = i + 8 + frame_len
-            if end > n:
-                end = n
-            chunk = raw[i + 8 : end]
+            frame_len = struct.unpack(">I", raw[i + 4: i + 8])[0]
+            end = min(i + 8 + frame_len, n)
+            chunk = raw[i + 8: end]
             if chunk:
                 out.append(chunk.decode("utf-8", errors="replace"))
             i = end
         else:
-            # TTY 部分或混了 TTY：找到下一个 \n 直接拷贝
             j = raw.find(b"\n", i)
             if j == -1:
                 out.append(raw[i:].decode("utf-8", errors="replace"))
                 break
-            out.append(raw[i : j + 1].decode("utf-8", errors="replace"))
+            out.append(raw[i: j + 1].decode("utf-8", errors="replace"))
             i = j + 1
     return "".join(out)
 
