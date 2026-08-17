@@ -23,7 +23,7 @@ class LogCollector:
     """
 
     def __init__(self):
-        self.docker = DockerClient()
+        self.docker = DockerClient.get_instance()
         self._stop_event = threading.Event()
 
         # ====== 批量缓冲 ======

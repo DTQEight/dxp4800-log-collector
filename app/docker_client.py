@@ -1,5 +1,6 @@
 import struct
 import logging
+import threading
 from app.config import Config
 
 logger = logging.getLogger(__name__)
@@ -11,9 +12,26 @@ class DockerClient:
     日志拉取不再走 Docker SDK（走 json-log 直读文件通道），但：
       - 前端"运行时"Tab 需要临时拉一下容器实时 stdout 给用户预览
       - 启动时需要 list/inspect 拿容器元数据
+
+    单例模式：避免每个 HTTP 请求都新建 DockerClient + ping()，
+    那会刷屏日志并浪费 socket。
     """
 
+    _singleton_lock = threading.Lock()
+    _singleton_instance: "DockerClient | None" = None
+
+    @classmethod
+    def get_instance(cls) -> "DockerClient":
+        """获取全局单例（线程安全）。所有 Web API 都用它，避免重复 ping。"""
+        if cls._singleton_instance is None:
+            with cls._singleton_lock:
+                if cls._singleton_instance is None:
+                    cls._singleton_instance = cls()
+        return cls._singleton_instance
+
     def __init__(self):
+        # 已有单例时不重复初始化（防止有人误直接 DockerClient()）
+        # 注意：单例请用 DockerClient.get_instance()，本构造函数保留是为了兼容旧代码
         try:
             import docker  # type: ignore[import-not-found]
         except Exception as e:
@@ -28,9 +46,28 @@ class DockerClient:
             logger.warning(f"docker SDK初始化失败，容器信息/运行时Tab可能不可用: {e}")
             self._client = None
 
+    def _ensure_alive(self):
+        """连接掉线时自动重连（不打印 INFO，只在 DEBUG 里记录）。"""
+        if self._client is None:
+            return
+        try:
+            self._client.ping()
+        except Exception:
+            try:
+                import docker  # type: ignore[import-not-found]
+                self._client = docker.DockerClient(
+                    base_url="unix:///var/run/docker.sock", version="auto", timeout=30,
+                )
+                self._client.ping()
+                logger.info("Docker API重连成功")
+            except Exception as e:
+                logger.debug(f"Docker API重连失败: {e}")
+                self._client = None
+
     # ---------------- 容器列表 / 详情 ----------------
     def list_running_containers(self) -> list[dict]:
         """返回 [{id,name,image,state,created,cpu_percent,memory_usage}]"""
+        self._ensure_alive()
         if self._client is None:
             return []
         out: list[dict] = []
@@ -80,6 +117,7 @@ class DockerClient:
         return out
 
     def get_container(self, container_id: str):
+        self._ensure_alive()
         if self._client is None:
             return None
         try:
@@ -91,6 +129,7 @@ class DockerClient:
     def tail_runtime(self, container_id: str, n: int = 100) -> list[str]:
         """临时通过 Docker SDK 拉最近 n 行，供用户 UI 预览。
         不写入日志文件，不用于正式采集（采集走 json-log 直读）。"""
+        self._ensure_alive()
         if self._client is None:
             return []
         try:

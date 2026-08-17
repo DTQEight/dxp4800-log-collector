@@ -85,7 +85,7 @@ def create_app() -> Flask:
     def api_containers():
         """返回实时运行的容器列表（来自Docker API）"""
         try:
-            live = DockerClient().list_running_containers()
+            live = DockerClient.get_instance().list_running_containers()
             live_ids = {c["id"] for c in live}
             db = models.list_containers()
             # 合并：加上DB中已停过的历史容器
@@ -200,7 +200,7 @@ def create_app() -> Flask:
         n = request.args.get("n", type=int, default=200)
         n = min(max(1, n), 20000)
         # json-log 单通道模式：一律用 tail_runtime 从 Docker SDK 临时拉最新 n 行做预览
-        dc = DockerClient()
+        dc = DockerClient.get_instance()
         cid = cid_or_name
         # 支持按 name 查找（前端点击容器时传的可能是 name 也可能是 cid）
         if len(cid_or_name) < 64:
