@@ -56,11 +56,11 @@ class Config:
     LOG_STORAGE_PATH = os.getenv("LOG_STORAGE_PATH", "/app/logs")
     LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "30"))
 
-    # 收集器配置（默认"前端观感上秒级更新"的档位，家用可放心）
+    # 收集器配置（核心目标：低 CPU，快速检测错误并推送微信）
     # 每隔多久去 Docker daemon 拉一次"每个容器的增量日志"
-    # 默认 30s：CPU 占用低，配合 STREAM_ENABLED 时 30s 兜底足够
-    # 想要更实时可以调到 10s，但 CPU 会明显上升
-    COLLECT_INTERVAL_SEC = int(os.getenv("COLLECT_INTERVAL_SEC", "30"))
+    # 默认 15s：在错误通知时效和 CPU 之间取平衡；比 30s 更快发现错误
+    # 想要秒级建议开 STREAM_ENABLED=true；想要更省 CPU 调 30-60
+    COLLECT_INTERVAL_SEC = int(os.getenv("COLLECT_INTERVAL_SEC", "15"))
 
     # 【默认关闭】每个容器一条独立的实时日志流线程
     # - true: 实时性最好（日志产生即入库/触发通知），但每容器多一条常驻线程，
@@ -71,6 +71,12 @@ class Config:
 
     # 单次从 docker logs 拉取的最大条数（防一次拉几百MB把NAS拉爆）
     MAX_LOG_LINES_PER_TICK = int(os.getenv("MAX_LOG_LINES_PER_TICK", "5000"))
+
+    # 首次启动时每个容器只拉最近 N 行日志，而非全量历史
+    # - 默认 100：只看最近 100 行，拿一个"最近日志时间戳"作为后续 since 起点
+    # - 作用：不需要翻几个月的老日志（省 CPU / 省内存 / 不会收到 N 天前老错误）
+    # - 如果你真的需要补全历史，可以调大到 5000 或更大
+    INITIAL_TAIL_LINES = int(os.getenv("INITIAL_TAIL_LINES", "100"))
 
     # 批量落盘 / 批量入库缓冲
     # - 日志停了最多 BATCH_FLUSH_SEC 秒后磁盘文件/DB里一定能看到

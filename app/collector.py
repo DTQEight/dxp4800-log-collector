@@ -108,13 +108,21 @@ class LogCollector:
             except Exception as e:
                 logger.warning(f"[{cname}] upsert容器失败: {e}")
 
-            # 增量拉日志：用 "since"，但首跑也只给最后 MAX_LOG_LINES_PER_TICK 行
+            # 增量拉日志：用 "since"，首跑只拉最近 INITIAL_TAIL_LINES 行（不翻历史）
             since = self._container_last_since.get(cid)
-            initial_pull = since is None   # since=None → 首次全量历史拉取
+            initial_pull = since is None   # since=None → 首次启动：不翻历史，只取最近 N 行拿 since 起点
+            if initial_pull:
+                # 首次启动：只拉最近 INITIAL_TAIL_LINES 行（默认 100），目的是拿到
+                # "最近一条日志的时间戳"作为后续 since 起点，不关心几周前的老日志。
+                # 省 CPU / 省内存 / 不触发老错误推送。
+                tail_arg = Config.INITIAL_TAIL_LINES
+            else:
+                # 后续增量：传 since 限定时间范围，tail=0 让 docker 不限制行数（由 since 保护）
+                tail_arg = 0
             try:
                 raw_logs = self.docker.get_container_logs(
                     cid,
-                    tail="all" if initial_pull else 0,
+                    tail=tail_arg,
                     since=int(since) if since else None,
                 )
             except Exception as e:
