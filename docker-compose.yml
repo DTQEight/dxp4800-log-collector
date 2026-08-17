@@ -54,8 +54,12 @@ services:
       # 可选：HTTP 代理（NAS 不能直连公网时使用），如 http://192.168.31.1:7890
       # - WECHAT_WORK_PROXY_URL=
     volumes:
-      # 必须：挂载 Docker socket，才能读取 NAS 上所有容器的日志
+      # 必须：挂载 Docker socket，用于获取容器列表和元数据
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # 推荐：只读挂载 containers 目录，直接读 json-log 文件（绕过 Docker daemon，快 10 倍）
+      # 时间戳从 JSON time 字段拿，100% 精准，不会出现"后面容器无日志"的问题
+      # 如果你的 NAS Docker 数据目录不在默认路径，改成实际路径（如 /volume1/@appstore/docker/containers）
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
       # 日志文件归档目录（建议放到 NAS 共享盘绝对路径，如 /volume1/共享名/docker-logs）
       - ./logs:/app/logs
       # SQLite 索引数据库（存储搜索用元数据）

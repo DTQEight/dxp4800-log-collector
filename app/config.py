@@ -98,6 +98,13 @@ class Config:
 
     DB_PATH = os.getenv("DB_PATH", "/app/data/logs.db")
 
+    # ===== json-log 直读（优先于 Docker SDK，性能更好、更稳定）=====
+    # 直接读 /var/lib/docker/containers/<cid>/<cid>-json.log 文件，绕过 Docker daemon
+    # 需要 docker-compose.yml 挂载 /var/lib/docker/containers:/var/lib/docker/containers:ro
+    # 如果目录不存在/不可读，自动回退到 Docker SDK logs API
+    USE_JSON_LOG_READER = _bool("USE_JSON_LOG_READER", True)
+    DOCKER_CONTAINERS_PATH = os.getenv("DOCKER_CONTAINERS_PATH", "/var/lib/docker/containers")
+
     # ===== 企业微信通知（监控错误日志，推送到企业微信）=====
     # 总开关：默认关闭，配置好 corpid/corpsecret/agentid 后再开启
     WECHAT_WORK_ENABLED = _bool("WECHAT_WORK_ENABLED", False)
