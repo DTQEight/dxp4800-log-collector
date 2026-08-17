@@ -58,8 +58,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # 推荐：只读挂载 containers 目录，直接读 json-log 文件（绕过 Docker daemon，快 10 倍）
       # 时间戳从 JSON time 字段拿，100% 精准，不会出现"后面容器无日志"的问题
-      # 如果你的 NAS Docker 数据目录不在默认路径，改成实际路径（如 /volume1/@appstore/docker/containers）
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # 绿联 DXP4800 默认 Docker Root Dir: /volume6/@docker（可用 docker info | grep "Docker Root Dir" 查）
+      # 其他 NAS 改成你的实际路径，例如 /var/lib/docker/containers 或 /volume1/@appstore/docker/containers
+      - /volume6/@docker/containers:/var/lib/docker/containers:ro
       # 日志文件归档目录（建议放到 NAS 共享盘绝对路径，如 /volume1/共享名/docker-logs）
       - ./logs:/app/logs
       # SQLite 索引数据库（存储搜索用元数据）
