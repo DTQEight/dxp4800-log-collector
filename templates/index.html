@@ -676,30 +676,69 @@ function stopAutoRuntime(){
 }
 function startAutoRuntimeIfNeeded(){
     stopAutoRuntime();
+    if(!currentCid && !currentName) return;
     // SSE 实时模式：只需要 currentCid，不依赖日期文件（直连 Docker daemon）
     if(autoMode === -1){
         if(!currentCid) return;
         startAutoSSE();
         return;
     }
-    // 轮询模式：必须选了日期文件才能从磁盘 from_bytes 增量读
+    // 轮询模式
     if(autoMode > 0){
-        if(!currentFile || currentTab!=='file') return;
+        // "运行时" Tab：不依赖磁盘文件，直接每 N 秒从 Docker daemon 拉最新 tail
+        // "文件"   Tab：先追磁盘增量，磁盘没变化再 fallback 拉 daemon tail
         autoTimer = setInterval(autoTickPoll, autoMode*1000);
+        // 启动后立刻先跑一次（用户观感：切过去立即刷新，不等第一圈 3 秒）
+        setTimeout(autoTickPoll, 150);
     }
 }
-/* 轮询模式：传 from_bytes=当前末尾偏移，后端 f.seek(偏移) 只读追加部分 */
+/* 轮询模式 tick：
+   - 运行时 Tab → 直接调 /tail 从 Docker daemon 拉最新
+   - 文件 Tab   → 先 from_bytes 追磁盘文件，没变化再 fallback /tail 兜底
+*/
 async function autoTickPoll(){
-    if(autoBusy || !currentFile || !currentName) return;
+    if(autoBusy || (!currentCid && !currentName)) return;
     autoBusy = true;
     try {
-        // Step 1: 先按 from_bytes 追磁盘文件（低成本）
+        // ==========================================
+        // 运行时 Tab：直接从 Docker daemon 拉最新 tail（不依赖磁盘刷盘）
+        // ==========================================
+        if(currentTab !== 'file'){
+            const n = Math.max(100, currentTail || 20);
+            const tailKey = `live::${currentCid||currentName}::${n}`;
+            let seen = _liveTailCache.get(tailKey);
+            if(!seen){ seen = new Map(); _liveTailCache.set(tailKey, seen); }
+            const tr = await fetch(`/api/containers/${encodeURIComponent(currentCid||currentName)}/tail?n=${n}`);
+            if(tr.ok){
+                const text = await tr.text();
+                const lines = text.split('\n');
+                const fresh = [];
+                for (const l of lines){
+                    if(!l) continue;
+                    const k = hashLine(l);
+                    if(!seen.has(k)) fresh.push(l);
+                    seen.set(k, Date.now());
+                }
+                if(seen.size > 20000){
+                    let i=0; const cutoff=seen.size-15000;
+                    for(const k of seen.keys()){ if(++i<cutoff) seen.delete(k); else break; }
+                }
+                if(fresh.length) appendTextarea('log-view', fresh.join('\n'));
+            }
+            autoBusy=false; return;
+        }
+
+        // ==========================================
+        // 文件 Tab：先追磁盘文件（低成本），无变化再 fallback 拉 daemon
+        // ==========================================
+        if(!currentFile){ autoBusy=false; return; }
+        // Step 1: 先按 from_bytes 追磁盘文件
         let qs = new URLSearchParams();
         if(autoBytesOffset != null) qs.set('from_bytes', String(autoBytesOffset));
         else qs.set('tail', String(currentTail || 20));
         let r = await fetch(`/api/containers/${encodeURIComponent(currentName)}/files/${encodeURIComponent(currentFile)}?${qs.toString()}`);
         if(r.status === 404){
-            if (currentTab==='file') await loadFiles();
+            await loadFiles();
             autoBusy=false; return;
         }
         let delta = await r.text();
@@ -707,9 +746,8 @@ async function autoTickPoll(){
         if(bytes) autoBytesOffset = Number(bytes);
         if(delta) appendTextarea('log-view', delta);
 
-        // Step 2: 如果这一轮磁盘文件没变化（比如文件还没到BATCH_FLUSH_SEC），
-        //         立刻 fallback：直接从 docker daemon 拉最新 N 行，给用户"已经更新了"的观感
-        //         （这一步就是你要的"不会一分钟才更新"的关键）
+        // Step 2: 如果这一轮磁盘文件没变化（还没到 BATCH_FLUSH_SEC 刷盘时机），
+        //         立刻 fallback：直接从 docker daemon 拉最新 N 行兜底
         if(!delta){
             const n = Math.max(50, currentTail || 20);
             const tailKey = `${currentCid}::${n}`;
@@ -727,7 +765,6 @@ async function autoTickPoll(){
                     if(!seen.has(k)) fresh.push(l);
                     seen.set(k, Date.now());
                 }
-                // 防 seen 无限大：只保留最近 20000 条
                 if(seen.size > 20000){
                     let i=0; const cutoff=seen.size-15000;
                     for(const k of seen.keys()){ if(++i<cutoff) seen.delete(k); else break; }
@@ -932,8 +969,10 @@ function switchTab(t){
     document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('active', e.dataset.tab===t));
     $('tab-file').style.display   = t==='file'   ? 'flex' : 'none';
     $('tab-search').style.display = t==='search' ? 'flex' : 'none';
-    if(t!=='file') stopAutoRuntime();
-    if(t==='file') startAutoRuntimeIfNeeded();
+    // 搜索 Tab：不需要自动刷新
+    if(t==='search'){ stopAutoRuntime(); return; }
+    // 运行时 Tab / 文件 Tab：都启动自动刷新（3s 轮询 or SSE）
+    startAutoRuntimeIfNeeded();
     if(t==='file' && currentName && !$('log-view').value) loadFiles();
 }
 
