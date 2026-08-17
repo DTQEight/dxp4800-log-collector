@@ -37,7 +37,6 @@ class LogCollector:
         self._buf_lock = threading.Lock()
         self._line_buffers: dict[str, deque] = {}
         self._db_rows: list[tuple] = []
-        self._last_flush_ts = time.monotonic()
 
         self._flush_thread: threading.Thread | None = None
         self._poke_flush_event = threading.Event()
@@ -168,6 +167,10 @@ class LogCollector:
 
         if first_error is not None:
             self._maybe_notify_error(cname, first_error[0], first_error[1])
+
+        # 攒够 BATCH_MAX_ENTRIES 条立即触发刷盘，不必等 BATCH_FLUSH_SEC 超时
+        if len(self._db_rows) >= Config.BATCH_MAX_ENTRIES:
+            self._poke_flush_event.set()
         return written
 
     # ---------------- 企业微信错误通知 ----------------
@@ -242,7 +245,6 @@ class LogCollector:
             db_rows = self._db_rows
             self._line_buffers = {}
             self._db_rows = []
-            self._last_flush_ts = time.monotonic()
 
         if not buf and not db_rows:
             return

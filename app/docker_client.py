@@ -85,8 +85,12 @@ class DockerClient:
             pass
         return 0.0
 
-    def list_running_containers(self) -> list[dict]:
-        """返回 [{id,name,image,state,created,cpu_percent,memory_usage}]"""
+    def list_running_containers(self, with_stats: bool = False) -> list[dict]:
+        """返回 [{id,name,image,status,created,cpu_percent,memory_usage,memory_limit,exclude}]
+
+        with_stats=False（默认）时跳过 stats() 调用，cpu/memory 返回 0，适合高频轮询；
+        with_stats=True 时计算真实 CPU% 和内存占用，适合详情页。
+        """
         self._ensure_alive()
         if self._client is None:
             return []
@@ -97,18 +101,20 @@ class DockerClient:
                 host_cfg = attrs.get("HostConfig") or {}
                 mem_limit_raw = host_cfg.get("Memory") or 0
                 mem_limit = int(mem_limit_raw) if mem_limit_raw else 0
-                mem_stats = attrs.get("MemoryStats") or {}
-                mem_current_raw = mem_stats.get("Usage") or mem_stats.get("MaxUsage") or 0
-                mem_current = int(mem_current_raw) if mem_current_raw else 0
-                state = attrs.get("State") or {}
-                # CPU%：从 stats() 单次调用中取 precpu/cpu 两个采样点差值
+                mem_current = 0
                 cpu_pct = 0.0
-                try:
-                    s = c.stats(stream=False, decode=True)
-                    if s:
-                        cpu_pct = self._calc_cpu_percent(s)
-                except Exception:
-                    pass
+                if with_stats:
+                    mem_stats = attrs.get("MemoryStats") or {}
+                    mem_current_raw = mem_stats.get("Usage") or mem_stats.get("MaxUsage") or 0
+                    mem_current = int(mem_current_raw) if mem_current_raw else 0
+                    # CPU%：从 stats() 单次调用中取 precpu/cpu 两个采样点差值
+                    try:
+                        s = c.stats(stream=False, decode=True)
+                        if s:
+                            cpu_pct = self._calc_cpu_percent(s)
+                    except Exception:
+                        pass
+                state = attrs.get("State") or {}
                 out.append({
                     "id": c.id,
                     "name": c.name.strip("/") or c.id[:12],

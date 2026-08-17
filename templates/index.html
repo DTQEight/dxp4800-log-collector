@@ -457,7 +457,6 @@
 <script>
 /* -------- 全局状态 -------- */
 let currentCid=null,currentName=null,currentFile=null,currentFileSize=0,currentTab='file';
-let lastLiveTailPromise = null;
 let lastLiveAbort = null;
 let currentTail = 20;   // 默认只预览最近20条，快速切换不卡
 
@@ -667,6 +666,24 @@ function startAutoRuntimeIfNeeded(){
    - 运行时 Tab → 直接调 /tail 从 Docker daemon 拉最新
    - 文件 Tab   → 先 from_bytes 追磁盘文件，没变化再 fallback /tail 兜底
 */
+/* 公共函数：从 daemon tail 文本中去重并追加到 textarea（运行时 Tab 和文件 Tab 兜底共用） */
+function dedupAndAppendTail(text, seen){
+    if(!text) return;
+    const lines = text.split('\n');
+    const fresh = [];
+    for (const l of lines){
+        if(!l) continue;
+        const k = hashLine(l);
+        if(!seen.has(k)) fresh.push(l);
+        seen.set(k, Date.now());
+    }
+    if(seen.size > 20000){
+        let i=0; const cutoff=seen.size-15000;
+        for(const k of seen.keys()){ if(++i<cutoff) seen.delete(k); else break; }
+    }
+    if(fresh.length) appendTextarea('log-view', fresh.join('\n'));
+}
+
 async function autoTickPoll(){
     if(autoBusy || (!currentCid && !currentName)) return;
     autoBusy = true;
@@ -682,19 +699,7 @@ async function autoTickPoll(){
             const tr = await fetch(`/api/containers/${encodeURIComponent(currentCid||currentName)}/tail?n=${n}`);
             if(tr.ok){
                 const text = await tr.text();
-                const lines = text.split('\n');
-                const fresh = [];
-                for (const l of lines){
-                    if(!l) continue;
-                    const k = hashLine(l);
-                    if(!seen.has(k)) fresh.push(l);
-                    seen.set(k, Date.now());
-                }
-                if(seen.size > 20000){
-                    let i=0; const cutoff=seen.size-15000;
-                    for(const k of seen.keys()){ if(++i<cutoff) seen.delete(k); else break; }
-                }
-                if(fresh.length) appendTextarea('log-view', fresh.join('\n'));
+                dedupAndAppendTail(text, seen);
             }
             autoBusy=false; return;
         }
@@ -728,19 +733,7 @@ async function autoTickPoll(){
             const tr = await fetch(`/api/containers/${encodeURIComponent(currentCid||currentName)}/tail?n=${n}`);
             if(tr.ok){
                 const text = await tr.text();
-                const lines = text.split('\n');
-                const fresh = [];
-                for (const l of lines){
-                    if(!l) continue;
-                    const k = hashLine(l);
-                    if(!seen.has(k)) fresh.push(l);
-                    seen.set(k, Date.now());
-                }
-                if(seen.size > 20000){
-                    let i=0; const cutoff=seen.size-15000;
-                    for(const k of seen.keys()){ if(++i<cutoff) seen.delete(k); else break; }
-                }
-                if(fresh.length) appendTextarea('log-view', fresh.join('\n'));
+                dedupAndAppendTail(text, seen);
             }
         }
     } catch(e){
@@ -1076,9 +1069,7 @@ async function loadSettings(){
             const el = $(f.el);
             if(!el) return;
             const v = data[f.key];
-            if(f.type === 'bool'){
-                el.checked = (v === true || v === 'true' || v === 1 || v === '1');
-            } else if(f.type === 'password'){
+            if(f.type === 'password'){
                 // 密码不回显；后端若返回密码已设置标记，给出提示
                 el.value = '';
                 const set = data['WEB_PASSWORD_SET'];
@@ -1103,9 +1094,7 @@ async function saveSettings(){
     SETTINGS_FIELDS.forEach(f => {
         const el = $(f.el);
         if(!el) return;
-        if(f.type === 'bool'){
-            payload[f.key] = !!el.checked;
-        } else if(f.type === 'number'){
+        if(f.type === 'number'){
             const n = Number(el.value);
             if(el.value !== '' && !isNaN(n)) payload[f.key] = n;
         } else if(f.type === 'password'){

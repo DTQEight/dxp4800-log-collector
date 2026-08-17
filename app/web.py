@@ -9,7 +9,7 @@ from functools import wraps
 from datetime import timedelta
 from flask import (
     Flask, render_template, request, jsonify, Response,
-    send_from_directory, session, redirect, url_for, stream_with_context
+    session, redirect, url_for
 )
 from app.config import Config, _verify_password
 from app.docker_client import DockerClient
@@ -56,7 +56,7 @@ def create_app() -> Flask:
             return f(*args, **kwargs)
         return wrapper
 
-    # ---------- 收集器句柄（Web API 能 request_immediate_flush / request_immediate_collect） ----------
+    # ---------- 收集器句柄（Web API 能 request_immediate_flush / 触发即时收集） ----------
     # 由 app/main.py 启动时把 collector 实例通过 set_collector_hook 注入进来
     _collector_ref = []
 
@@ -146,7 +146,6 @@ def create_app() -> Flask:
     def api_container_files(container_name):
         files = LogStorage.list_container_files(container_name)
         # 顺带返回每个文件的大小，前端能提示"大文件建议只取最后N行"
-        import os
         info = []
         for fn in files:
             fpath = os.path.join(Config.LOG_STORAGE_PATH, container_name, fn)

@@ -35,14 +35,6 @@ def _build_proxies() -> dict | None:
     return {"http": url, "https": url}
 
 
-def _clear_token() -> None:
-    """强制让下次请求重新拿 token（token 失效时调用）。"""
-    global _access_token, _token_expires_at
-    with _token_lock:
-        _access_token = None
-        _token_expires_at = 0.0
-
-
 def get_access_token(force_refresh: bool = False) -> str | None:
     """获取企业微信 access_token，带本地缓存（默认提前 5 分钟过期）。
 

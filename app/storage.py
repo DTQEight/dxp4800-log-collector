@@ -134,13 +134,6 @@ class LogStorage:
         return iso_local(ts_local), content
 
     @staticmethod
-    def append_log(container_name: str, raw_line: str):
-        ts, content = LogStorage.append_many(container_name, [raw_line])
-        if not ts:
-            return None, None
-        return ts[0], content[0]
-
-    @staticmethod
     def append_many(container_name: str, raw_lines):
         if not raw_lines:
             return [], []

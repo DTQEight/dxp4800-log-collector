@@ -1,6 +1,6 @@
 import sqlite3
 import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
 from app.config import Config
 from app.storage import iso_local, now_local   # 统一本地时区工具
 import logging
@@ -108,16 +108,6 @@ def upsert_container(container_info: dict):
             container_info.get("first_seen", now),
             now,
         ))
-
-
-def insert_log_entry(container_id, container_name, timestamp, source, content):
-    """保留单行接口，用于外部代码；内部推荐 insert_log_entries 批量"""
-    with _db_lock:
-        conn = _get_conn()
-        conn.execute("""
-            INSERT INTO log_entries (container_id, container_name, timestamp, source, content)
-            VALUES (?, ?, ?, ?, ?)
-        """, (container_id, container_name, timestamp, source, content))
 
 
 def insert_log_entries(rows):

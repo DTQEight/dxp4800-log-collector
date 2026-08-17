@@ -41,7 +41,6 @@ def main():
         "interval",
         hours=6,
         id="cleanup-logs",
-        next_run_time=None,
     )
     scheduler.start()
 
@@ -52,11 +51,8 @@ def main():
     except Exception as e:
         logging.warning(f"inject collector hook failed: {e}")
 
-    stop_reason = {"flag": False}
-
     def _graceful(signum, frame):
         logging.info("收到退出信号，优雅关闭...")
-        stop_reason["flag"] = True
         collector.stop()
         scheduler.shutdown(wait=False)
         sys.exit(0)
