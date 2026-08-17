@@ -54,32 +54,19 @@ class Config:
     LOG_STORAGE_PATH = os.getenv("LOG_STORAGE_PATH", "/app/logs")
     LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "30"))
 
-    # 收集器配置（核心目标：低 CPU，快速检测错误并推送微信）
-    # 每隔多久去 Docker daemon 拉一次"每个容器的增量日志"
-    # 默认 15s：在错误通知时效和 CPU 之间取平衡；比 30s 更快发现错误
-    # 想要秒级建议开 STREAM_ENABLED=true；想要更省 CPU 调 30-60
+    # 收集器配置（json-log 直读单通道）
+    # 每隔多久遍历一次运行中容器，检查有无新日志
+    # 默认 15s：错误通知时效和 CPU 之间的平衡；想更省可调 30-60
     COLLECT_INTERVAL_SEC = int(os.getenv("COLLECT_INTERVAL_SEC", "15"))
 
-    # 【默认关闭】每个容器一条独立的实时日志流线程
-    # - true: 实时性最好（日志产生即入库/触发通知），但每容器多一条常驻线程，
-    #         日志刷得快的容器（go2rtc/数据库等）CPU 会明显上升
-    # - false: 纯轮询，靠 COLLECT_INTERVAL_SEC 决定延迟，CPU 最省
-    # 家用 NAS 推荐 false（默认）；CPU 富余且需要秒级通知再开 true
-    STREAM_ENABLED = _bool("STREAM_ENABLED", False)
-
-    # 单次从 docker logs 拉取的最大条数（防一次拉几百MB把NAS拉爆）
-    MAX_LOG_LINES_PER_TICK = int(os.getenv("MAX_LOG_LINES_PER_TICK", "5000"))
-
-    # 首次启动时每个容器只拉最近 N 行日志，而非全量历史
-    # - 默认 100：只看最近 100 行，拿一个"最近日志时间戳"作为后续 since 起点
-    # - 作用：不需要翻几个月的老日志（省 CPU / 省内存 / 不会收到 N 天前老错误）
-    # - 如果你真的需要补全历史，可以调大到 5000 或更大
+    # 首次启动时每个容器只拉最近 N 行（从 json-log 文件尾部 seek）
+    # 默认 100：省 CPU / 省内存 / 不收几周前老错误；补全历史可调大到 5000+
     INITIAL_TAIL_LINES = int(os.getenv("INITIAL_TAIL_LINES", "100"))
 
+    # 单轮读文件的最大行数（防一次拉几百MB把NAS拉爆）
+    MAX_LOG_LINES_PER_TICK = int(os.getenv("MAX_LOG_LINES_PER_TICK", "5000"))
+
     # 批量落盘 / 批量入库缓冲
-    # - 日志停了最多 BATCH_FLUSH_SEC 秒后磁盘文件/DB里一定能看到
-    # - 日志量大会更快触发 BATCH_MAX_ENTRIES
-    # - 想要"更实时"（比如几秒钟内文件里就出现）可以把 BATCH_FLUSH_SEC 设 2-3
     BATCH_FLUSH_SEC = float(os.getenv("BATCH_FLUSH_SEC", "3.0"))
     BATCH_MAX_ENTRIES = int(os.getenv("BATCH_MAX_ENTRIES", "200"))
 
@@ -96,10 +83,9 @@ class Config:
 
     DB_PATH = os.getenv("DB_PATH", "/app/data/logs.db")
 
-    # ===== json-log 直读（优先于 Docker SDK，性能更好、更稳定）=====
+    # ===== json-log 直读（唯一通道）=====
     # 直接读 /var/lib/docker/containers/<cid>/<cid>-json.log 文件，绕过 Docker daemon
-    # 需要 docker-compose.yml 挂载 /var/lib/docker/containers:/var/lib/docker/containers:ro
-    # 如果目录不存在/不可读，自动回退到 Docker SDK logs API
+    # 必须在 docker-compose.yml 挂载 containers 目录，否则无法读取日志
     USE_JSON_LOG_READER = _bool("USE_JSON_LOG_READER", True)
     DOCKER_CONTAINERS_PATH = os.getenv("DOCKER_CONTAINERS_PATH", "/var/lib/docker/containers")
 
@@ -149,11 +135,10 @@ _RUNTIME_CONFIG_PATH = os.path.join(
     "runtime_config.json",
 )
 
-# UI 可调参数的键名 + 类型转换函数
+# UI 可调参数的键名 + 类型转换函数（不含企业微信模块）
 UI_ADJUSTABLE = {
     "COLLECT_INTERVAL_SEC":    int,
     "INITIAL_TAIL_LINES":      int,
-    "STREAM_ENABLED":          _bool,
     "LOG_RETENTION_DAYS":      int,
     "BATCH_FLUSH_SEC":         float,
     "BATCH_MAX_ENTRIES":       int,
@@ -179,8 +164,6 @@ def load_runtime_config():
         try:
             if key == "EXCLUDE_CONTAINERS":
                 setattr(Config, key, [c.strip() for c in str(val).split(",") if c.strip()])
-            elif key == "STREAM_ENABLED":
-                setattr(Config, key, _bool(key, val))
             elif conv is int:
                 setattr(Config, key, int(val))
             elif conv is float:
@@ -206,8 +189,6 @@ def save_runtime_config(updates: dict) -> dict:
         try:
             if key == "EXCLUDE_CONTAINERS":
                 setattr(Config, key, [c.strip() for c in str(val).split(",") if c.strip()])
-            elif key == "STREAM_ENABLED":
-                setattr(Config, key, str(val).strip().lower() in ("1", "true", "yes", "on", "y"))
             elif UI_ADJUSTABLE[key] is int:
                 setattr(Config, key, int(val))
             elif UI_ADJUSTABLE[key] is float:
@@ -217,7 +198,6 @@ def save_runtime_config(updates: dict) -> dict:
             updated.append(key)
         except (ValueError, TypeError):
             rejected.append(key)
-    # 持久化到文件（合并已有值）
     existing = {}
     try:
         with open(_RUNTIME_CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -241,7 +221,6 @@ def get_ui_config() -> dict:
     return {
         "COLLECT_INTERVAL_SEC":    Config.COLLECT_INTERVAL_SEC,
         "INITIAL_TAIL_LINES":      Config.INITIAL_TAIL_LINES,
-        "STREAM_ENABLED":          Config.STREAM_ENABLED,
         "LOG_RETENTION_DAYS":      Config.LOG_RETENTION_DAYS,
         "BATCH_FLUSH_SEC":         Config.BATCH_FLUSH_SEC,
         "BATCH_MAX_ENTRIES":       Config.BATCH_MAX_ENTRIES,

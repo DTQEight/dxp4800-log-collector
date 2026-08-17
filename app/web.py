@@ -64,7 +64,7 @@ def create_app() -> Flask:
     @app.route("/")
     @login_required
     def index():
-        return render_template("index.html", stream_enabled=Config.STREAM_ENABLED)
+        return render_template("index.html")
 
     # ---------- API: 容器 ----------
     @app.route("/api/containers")
@@ -180,82 +180,33 @@ def create_app() -> Flask:
         }
         return Response(content, mimetype="text/plain; charset=utf-8", headers=headers)
 
-    # ---------- API: 实时日志 tail ----------
+    # ---------- API: 运行时 Tab 临时拉 n 行预览（不写入日志文件） ----------
     @app.route("/api/containers/<cid_or_name>/tail")
     @login_required
     def api_tail(cid_or_name):
         n = request.args.get("n", type=int, default=200)
         n = min(max(1, n), 20000)
-        use_sse = request.args.get("stream", default="0") in ("1", "true", "True")
-        if use_sse and Config.STREAM_ENABLED:
-            return _tail_sse(cid_or_name, n)
-        text = DockerClient().get_container_logs(cid_or_name, tail=n) or ""
-        # 清洗原始日志：剥 Docker UTC 前缀(转本地时区) + ANSI 颜色码 + 应用重复时间戳
-        from app.docker_client import clean_raw_log_lines
-        text = clean_raw_log_lines(text)
-        # /tail 的响应也顺手返回 X-Collect-Now，让前端知道"我刚刚触发了收集"
-        headers = {}
+        # json-log 单通道模式：一律用 tail_runtime 从 Docker SDK 临时拉最新 n 行做预览
+        dc = DockerClient()
+        cid = cid_or_name
+        # 支持按 name 查找（前端点击容器时传的可能是 name 也可能是 cid）
+        if len(cid_or_name) < 64:
+            container = dc.get_container(cid_or_name)
+            if container is None:
+                # 按名字找不到 → 再按 ID 前缀找
+                for live in dc.list_running_containers():
+                    if live["name"] == cid_or_name or live["id"].startswith(cid_or_name):
+                        cid = live["id"]
+                        break
+            else:
+                cid = container.id
+        lines = dc.tail_runtime(cid, n=n)
+        text = "\n".join(lines)
         try:
             app._collector_weakref_hook and app._collector_weakref_hook.request_immediate_flush()
         except Exception:
             pass
-        return Response(text, mimetype="text/plain; charset=utf-8", headers=headers)
-
-    def _tail_sse(cid_or_name: str, n: int) -> Response:
-        """真实 SSE tail -f：有新日志就推事件，不推则 15s 心跳。省轮询开销。"""
-        from app.docker_client import clean_raw_log_lines
-
-        def _clean(text: str) -> list[str]:
-            """清洗一批原始 Docker 日志：剥 Docker UTC 前缀(转本地时区) + ANSI + 应用重复时间戳。
-            返回清洗后的非空行列表（保持和 /tail 接口、归档文件一致格式）。"""
-            if not text:
-                return []
-            cleaned = clean_raw_log_lines(text)
-            return [ln for ln in cleaned.splitlines() if ln]
-
-        def gen():
-            # 先吐一次历史 n 行（清洗后）
-            hist = DockerClient().get_container_logs(cid_or_name, tail=n) or ""
-            hist_lines = _clean(hist)
-            yield f"event: lines\ndata: {json.dumps({'lines': hist_lines})}\n\n"
-            # 再起流
-            last_ts = int(time.time())
-            stream = DockerClient().stream_container_logs(cid_or_name, since=last_ts)
-            if stream is None:
-                yield "event: error\ndata: stream_closed\n\n"
-                return
-            buf: list[str] = []
-            raw_buf: list[str] = []   # 原始行累积，凑齐后整体 clean 一次
-            last_flush = time.monotonic()
-            try:
-                for line in stream:
-                    if not line:
-                        continue
-                    raw_buf.append(line)
-                    now = time.monotonic()
-                    # 聚 500ms 或 50 行再推一次事件，避免每行都推
-                    if len(raw_buf) >= 50 or (now - last_flush) >= 0.5:
-                        cleaned = _clean("\n".join(raw_buf))
-                        if cleaned:
-                            yield f"event: lines\ndata: {json.dumps({'lines': cleaned})}\n\n"
-                        raw_buf.clear()
-                        last_flush = now
-                if raw_buf:
-                    cleaned = _clean("\n".join(raw_buf))
-                    if cleaned:
-                        yield f"event: lines\ndata: {json.dumps({'lines': cleaned})}\n\n"
-            except GeneratorExit:
-                return
-            except Exception as e:
-                yield f"event: error\ndata: {json.dumps({'err': str(e)})}\n\n"
-            finally:
-                yield "event: end\ndata: {}\n\n"
-
-        return Response(
-            stream_with_context(gen()),
-            mimetype="text/event-stream",
-            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
-        )
+        return Response(text, mimetype="text/plain; charset=utf-8")
 
     # ---------- API: 强制触发一次"全量增量拉取 + 立即刷盘"（解决"前端看一分钟才更新"的终极兜底） ----------
     @app.route("/api/collect_now", methods=["POST"])
@@ -327,9 +278,6 @@ def create_app() -> Flask:
         from app.config import save_runtime_config
         payload = request.get_json(silent=True) or {}
         result = save_runtime_config(payload)
-        # 修改了 STREAM_ENABLED 后，重新渲染模板变量
-        if "STREAM_ENABLED" in result.get("updated", []):
-            app.jinja_env.globals["stream_enabled"] = Config.STREAM_ENABLED
         return jsonify({"ok": True, **result})
 
     return app
