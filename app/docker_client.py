@@ -65,6 +65,26 @@ class DockerClient:
                 self._client = None
 
     # ---------------- 容器列表 / 详情 ----------------
+    def _calc_cpu_percent(self, stats: dict) -> float:
+        """从 Docker stats 返回的 cpu_stats + precpu_stats 计算瞬时 CPU%。
+        Docker 一次 stats 调用就包含两个采样点，无需两次调用。"""
+        try:
+            cpu = stats.get("cpu_stats") or {}
+            pre = stats.get("precpu_stats") or {}
+            cpu_total = cpu.get("cpu_usage", {}).get("total_usage", 0)
+            pre_total = pre.get("cpu_usage", {}).get("total_usage", 0)
+            cpu_sys = cpu.get("system_cpu_usage", 0)
+            pre_sys = pre.get("system_cpu_usage", 0)
+            online_cpus = cpu.get("online_cpus", 1) or 1
+            # 按 Docker 公式：CPU% = Δcontainer / Δsystem * online_cpus * 100
+            delta_cpu = cpu_total - pre_total
+            delta_sys = cpu_sys - pre_sys
+            if delta_sys > 0 and delta_cpu >= 0:
+                return round(delta_cpu / delta_sys * online_cpus * 100.0, 2)
+        except Exception:
+            pass
+        return 0.0
+
     def list_running_containers(self) -> list[dict]:
         """返回 [{id,name,image,state,created,cpu_percent,memory_usage}]"""
         self._ensure_alive()
@@ -81,14 +101,21 @@ class DockerClient:
                 mem_current_raw = mem_stats.get("Usage") or mem_stats.get("MaxUsage") or 0
                 mem_current = int(mem_current_raw) if mem_current_raw else 0
                 state = attrs.get("State") or {}
+                # CPU%：从 stats() 单次调用中取 precpu/cpu 两个采样点差值
+                cpu_pct = 0.0
+                try:
+                    s = c.stats(stream=False, decode=True)
+                    if s:
+                        cpu_pct = self._calc_cpu_percent(s)
+                except Exception:
+                    pass
                 out.append({
                     "id": c.id,
                     "name": c.name.strip("/") or c.id[:12],
                     "image": (attrs.get("Config") or {}).get("Image") or "",
                     "status": state.get("Status") or "running",
                     "created": attrs.get("Created") or "",
-                    # CPU% 需额外 stats() 两次采样调用，list 场景性能代价过高，暂不计算
-                    "cpu_percent": 0.0,
+                    "cpu_percent": cpu_pct,
                     "memory_usage": mem_current,
                     "memory_limit": mem_limit,
                     "exclude": False,

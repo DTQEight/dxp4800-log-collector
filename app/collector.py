@@ -26,13 +26,18 @@ class LogCollector:
         self.docker = DockerClient.get_instance()
         self._stop_event = threading.Event()
 
+        # ====== 指纹去重 ======
+        # 用 deque + set 配合做 LRU：满后手动弹出最旧元素并从 set 删除
+        # 避免旧方案 set(deque) 全量重建的 O(n) CPU 尖峰
+        self._seen_fp_set: set[str] = set()
+        self._seen_fp_deque: deque[str] = deque()
+        self._seen_fp_maxlen = 5000
+
         # ====== 批量缓冲 ======
         self._buf_lock = threading.Lock()
         self._line_buffers: dict[str, deque] = {}
         self._db_rows: list[tuple] = []
         self._last_flush_ts = time.monotonic()
-        self._seen_fp_set: set[str] = set()
-        self._seen_fp_deque: deque[str] = deque(maxlen=5000)
 
         self._flush_thread: threading.Thread | None = None
         self._poke_flush_event = threading.Event()
@@ -151,8 +156,10 @@ class LogCollector:
                     continue
                 self._seen_fp_set.add(fp)
                 self._seen_fp_deque.append(fp)
-                if len(self._seen_fp_deque) >= self._seen_fp_deque.maxlen:
-                    self._seen_fp_set = set(self._seen_fp_deque)
+                # 增量淘汰：超过上限时弹出最旧指纹，同步从 set 删除（O(1) 而非 O(n) 重建）
+                if len(self._seen_fp_deque) > self._seen_fp_maxlen:
+                    oldest = self._seen_fp_deque.popleft()
+                    self._seen_fp_set.discard(oldest)
                 q.append(raw)
                 self._db_rows.append((cid, cname, ts, source, content))
                 written += 1
