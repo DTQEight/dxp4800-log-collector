@@ -58,10 +58,15 @@ class Config:
 
     # 收集器配置（默认"前端观感上秒级更新"的档位，家用可放心）
     # 每隔多久去 Docker daemon 拉一次"每个容器的增量日志"
-    COLLECT_INTERVAL_SEC = int(os.getenv("COLLECT_INTERVAL_SEC", "60"))
+    # 默认 10s：在新错误通知时效和 CPU 占用之间取平衡
+    # (开了 STREAM_ENABLED=true 时这个间隔主要兜底，可以拉大到 30-60s)
+    COLLECT_INTERVAL_SEC = int(os.getenv("COLLECT_INTERVAL_SEC", "10"))
 
-    # 【默认关闭】每个容器一条独立的实时日志流线程
-    STREAM_ENABLED = _bool("STREAM_ENABLED", False)
+    # 【默认开启】每个容器一条独立的实时日志流线程
+    # - true: 实时性最好（日志产生即入库/触发通知），但每容器多一条常驻线程
+    # - false: 纯轮询，靠 COLLECT_INTERVAL_SEC 决定延迟，CPU 最省
+    # 家用 NAS（容器数 < 20）建议 true；上百容器的服务器建议 false + 调大间隔
+    STREAM_ENABLED = _bool("STREAM_ENABLED", True)
 
     # 单次从 docker logs 拉取的最大条数（防一次拉几百MB把NAS拉爆）
     MAX_LOG_LINES_PER_TICK = int(os.getenv("MAX_LOG_LINES_PER_TICK", "5000"))

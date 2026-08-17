@@ -121,11 +121,23 @@ class LogCollector:
             if raw_logs:
                 lines = raw_logs.splitlines()
                 n_in = len(lines)
-                lines = self._dedupe_and_feed(cid, cname, "pull", lines, initial_pull=initial_pull)
-                if lines or n_in:
-                    logger.debug(f"[{cname}] tick 拉 {n_in} 行，写入 {lines} 条（批量缓冲中）")
-
-            self._container_last_since[cid] = time.time()
+                # 跟踪下一轮 since：用拉到的最后一行日志的实际时间戳（不是程序运行时间）
+                # 这样可以避免网络/磁盘卡顿导致漏日志
+                last_ts_unix = self._extract_last_log_unix_ts(lines)
+                written = self._dedupe_and_feed(cid, cname, "pull", lines, initial_pull=initial_pull)
+                if written or n_in:
+                    logger.debug(f"[{cname}] tick 拉 {n_in} 行，写入 {written} 条（批量缓冲中）")
+                if last_ts_unix is not None:
+                    # +1 秒避免下一轮 Docker since= 含等号又把这条重复拉回来
+                    self._container_last_since[cid] = last_ts_unix + 1
+                else:
+                    # 没解析出时间戳，回退用当前时间
+                    self._container_last_since[cid] = time.time()
+            else:
+                # 这一轮没新日志，since 保持不变（下一轮继续从老位置拉，防止漏）
+                if initial_pull:
+                    # 首跑即使没日志也要打个桩，避免下次还走 initial_pull
+                    self._container_last_since[cid] = time.time()
 
             # （可选）启动实时流监听
             if Config.STREAM_ENABLED and (
@@ -170,6 +182,31 @@ class LogCollector:
         # hash 只要 20 字节字符串；短 enough 省内存、长 enough 避免碰撞
         raw = f"{cid}|{ts}|{content[:200]}".encode("utf-8")
         return hashlib.md5(raw, usedforsecurity=False).hexdigest()
+
+    def _extract_last_log_unix_ts(self, lines: list[str]) -> float | None:
+        """从一批日志行里解析"最后一行"的 unix 时间戳，用于下一轮 since。
+
+        Docker timestamps=True 时每行格式：
+            2026-08-17T10:52:22.123456789Z content...
+            2026-08-17T10:52:22.123456789+08:00 content...
+        """
+        if not lines:
+            return None
+        # 从后往前找，跳过空行
+        from app.storage import TIMESTAMP_PATTERN, parse_timestamp_to_local
+        for line in reversed(lines):
+            if not line or not line.strip():
+                continue
+            m = TIMESTAMP_PATTERN.match(line)
+            if not m:
+                continue
+            ts_raw = m.group(1)
+            dt = parse_timestamp_to_local(ts_raw)
+            if dt is None:
+                continue
+            # aware datetime → unix 秒（浮点）
+            return dt.timestamp()
+        return None
 
     def _dedupe_and_feed(self, cid, cname, source, lines, initial_pull: bool = False):
         """解析+去重+进缓冲。返回：实际写入缓冲的条数

@@ -56,10 +56,11 @@ class DockerClient:
         """获取指定容器的日志
 
         Args:
-            tail: 'all' 或 int；
-                  调用方注意不要直接传 'all' 给跑了几个月的容器，
-                  否则把 10GB 日志全拉回来 CPU/IO 都会炸。
-            since: unix秒(int) 或 None
+            tail: 'all' / 0 / int：
+                  - 'all' → 只给最后 MAX_LOG_LINES_PER_TICK 行（首跑保护，避免拉爆）
+                  - 0     → 不限制行数（增量场景配合 since 用，由 since 决定范围）
+                  - int>0 → 限制最后 N 行（受 MAX_LOG_LINES_PER_TICK 上限保护）
+            since: unix秒(int) 或 None；只返回该时间点之后的日志
         """
         try:
             c = self.client.containers.get(container_id_or_name)
@@ -67,6 +68,12 @@ class DockerClient:
             # tail 参数保护：'all' 时只给最后 MAX_LOG_LINES_PER_TICK 行，避免首跑拉爆
             if tail == "all":
                 kwargs["tail"] = Config.MAX_LOG_LINES_PER_TICK
+            elif tail in (0, "0"):
+                # 0 = 不限制行数，让 since 来决定范围；不加 tail 参数
+                # 但配合 since 时 Docker 默认仍可能返回大量历史，再戴上 MAX 保护
+                if since is None:
+                    kwargs["tail"] = Config.MAX_LOG_LINES_PER_TICK
+                # else: since 已限定范围，不限制行数
             else:
                 try:
                     t = int(tail)
