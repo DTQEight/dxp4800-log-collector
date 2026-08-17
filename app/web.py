@@ -314,4 +314,22 @@ def create_app() -> Flask:
             "proxy_configured": bool(Config.WECHAT_WORK_PROXY_URL),
         })
 
+    # ---------- API: 运行时配置（UI 可调参数）----------
+    @app.route("/api/config", methods=["GET"])
+    @login_required
+    def api_get_config():
+        from app.config import get_ui_config
+        return jsonify(get_ui_config())
+
+    @app.route("/api/config", methods=["POST"])
+    @login_required
+    def api_save_config():
+        from app.config import save_runtime_config
+        payload = request.get_json(silent=True) or {}
+        result = save_runtime_config(payload)
+        # 修改了 STREAM_ENABLED 后，重新渲染模板变量
+        if "STREAM_ENABLED" in result.get("updated", []):
+            app.jinja_env.globals["stream_enabled"] = Config.STREAM_ENABLED
+        return jsonify({"ok": True, **result})
+
     return app

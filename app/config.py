@@ -142,3 +142,117 @@ class Config:
     #   true  = 老错误也报（排障时可能有用，但首次启动容易收到一堆老日志）
     #   false = 只报"本次启动之后新产生"的错误（默认，符合直觉）
     WECHAT_WORK_NOTIFY_ON_INIT = _bool("WECHAT_WORK_NOTIFY_ON_INIT", False)
+
+
+# ===== 运行时配置持久化（UI 修改的参数存 JSON，重启后保留）=====
+# 只持久化 UI 可调的参数（不含企业微信模块）
+_RUNTIME_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.getenv("DB_PATH", "/app/data/logs.db")),
+    "runtime_config.json",
+)
+
+# UI 可调参数的键名 + 类型转换函数
+UI_ADJUSTABLE = {
+    "COLLECT_INTERVAL_SEC":    int,
+    "INITIAL_TAIL_LINES":      int,
+    "STREAM_ENABLED":          _bool,
+    "LOG_RETENTION_DAYS":      int,
+    "BATCH_FLUSH_SEC":         float,
+    "BATCH_MAX_ENTRIES":       int,
+    "MAX_LOG_LINES_PER_TICK":  int,
+    "EXCLUDE_CONTAINERS":      str,   # 逗号分隔字符串，运行时拆成 list
+    "WEB_USERNAME":            str,
+    "WEB_PASSWORD":            str,
+}
+
+
+def load_runtime_config():
+    """启动时从 JSON 文件加载 UI 修改过的配置，覆盖 Config 类属性。"""
+    import json
+    try:
+        with open(_RUNTIME_CONFIG_PATH, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return
+    for key, conv in UI_ADJUSTABLE.items():
+        if key not in saved:
+            continue
+        val = saved[key]
+        try:
+            if key == "EXCLUDE_CONTAINERS":
+                setattr(Config, key, [c.strip() for c in str(val).split(",") if c.strip()])
+            elif key == "STREAM_ENABLED":
+                setattr(Config, key, _bool(key, val))
+            elif conv is int:
+                setattr(Config, key, int(val))
+            elif conv is float:
+                setattr(Config, key, float(val))
+            else:
+                setattr(Config, key, str(val))
+        except (ValueError, TypeError):
+            pass
+
+
+def save_runtime_config(updates: dict) -> dict:
+    """保存 UI 修改的配置到 JSON 文件，同时更新 Config 类属性。
+
+    Returns: {"updated": [...], "rejected": [...]}
+    """
+    import json
+    updated = []
+    rejected = []
+    for key, val in updates.items():
+        if key not in UI_ADJUSTABLE:
+            rejected.append(key)
+            continue
+        try:
+            if key == "EXCLUDE_CONTAINERS":
+                setattr(Config, key, [c.strip() for c in str(val).split(",") if c.strip()])
+            elif key == "STREAM_ENABLED":
+                setattr(Config, key, str(val).strip().lower() in ("1", "true", "yes", "on", "y"))
+            elif UI_ADJUSTABLE[key] is int:
+                setattr(Config, key, int(val))
+            elif UI_ADJUSTABLE[key] is float:
+                setattr(Config, key, float(val))
+            else:
+                setattr(Config, key, str(val))
+            updated.append(key)
+        except (ValueError, TypeError):
+            rejected.append(key)
+    # 持久化到文件（合并已有值）
+    existing = {}
+    try:
+        with open(_RUNTIME_CONFIG_PATH, "r", encoding="utf-8") as f:
+            existing = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    for key in updated:
+        existing[key] = getattr(Config, key) if key != "EXCLUDE_CONTAINERS" else ",".join(Config.EXCLUDE_CONTAINERS)
+    try:
+        os.makedirs(os.path.dirname(_RUNTIME_CONFIG_PATH), exist_ok=True)
+        with open(_RUNTIME_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        import logging
+        logging.getLogger(__name__).error(f"保存运行时配置失败: {e}")
+    return {"updated": updated, "rejected": rejected}
+
+
+def get_ui_config() -> dict:
+    """返回 UI 可调参数的当前值（给前端用）。"""
+    return {
+        "COLLECT_INTERVAL_SEC":    Config.COLLECT_INTERVAL_SEC,
+        "INITIAL_TAIL_LINES":      Config.INITIAL_TAIL_LINES,
+        "STREAM_ENABLED":          Config.STREAM_ENABLED,
+        "LOG_RETENTION_DAYS":      Config.LOG_RETENTION_DAYS,
+        "BATCH_FLUSH_SEC":         Config.BATCH_FLUSH_SEC,
+        "BATCH_MAX_ENTRIES":       Config.BATCH_MAX_ENTRIES,
+        "MAX_LOG_LINES_PER_TICK":  Config.MAX_LOG_LINES_PER_TICK,
+        "EXCLUDE_CONTAINERS":      ",".join(Config.EXCLUDE_CONTAINERS),
+        "WEB_USERNAME":            Config.WEB_USERNAME,
+        "WEB_PASSWORD":            Config.WEB_PASSWORD,
+    }
+
+
+# 启动时自动加载持久化配置
+load_runtime_config()

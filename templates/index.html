@@ -204,6 +204,75 @@
         .modal .result.ok    { display:block; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; }
         .modal .result.err   { display:block; background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
         .modal .hint { font-size:11.5px; color:#94a3b8; margin-top:10px; line-height:1.5; }
+
+        /* ===== 设置面板 ===== */
+        .modal.settings-modal {
+            width:min(680px, 94vw);
+            max-height:90vh;
+        }
+        .settings-form {
+            display:flex; flex-direction:column; gap:10px;
+            margin-top:6px;
+        }
+        .settings-form .field {
+            display:flex; flex-direction:column; gap:4px;
+            padding:10px 12px;
+            background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;
+        }
+        .settings-form .field-row {
+            display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+        }
+        .settings-form .field label.field-label {
+            font-size:13px; font-weight:500; color:#0f172a;
+            flex:0 0 auto; min-width:140px;
+        }
+        .settings-form .field input[type="number"],
+        .settings-form .field input[type="text"],
+        .settings-form .field input[type="password"] {
+            flex:1; min-width:140px; padding:6px 9px;
+            border:1px solid #cbd5e1; border-radius:6px; font-size:13px;
+            background:#fff; color:#0f172a;
+        }
+        .settings-form .field input:focus {
+            outline:none; border-color:#2563eb; box-shadow:0 0 0 2px rgba(37,99,235,.15);
+        }
+        .settings-form .field .desc {
+            font-size:11.5px; color:#94a3b8; line-height:1.4;
+        }
+        .settings-form .field .unit { font-size:12px; color:#64748b; flex:0 0 auto; }
+        .settings-form .field .toggle {
+            position:relative; display:inline-block; width:40px; height:22px;
+            flex:0 0 auto;
+        }
+        .settings-form .field .toggle input { opacity:0; width:0; height:0; }
+        .settings-form .field .toggle .slider {
+            position:absolute; cursor:pointer; inset:0;
+            background:#cbd5e1; border-radius:22px; transition:.2s;
+        }
+        .settings-form .field .toggle .slider:before {
+            content:""; position:absolute; height:16px; width:16px; left:3px; top:3px;
+            background:#fff; border-radius:50%; transition:.2s;
+        }
+        .settings-form .field .toggle input:checked + .slider { background:#16a34a; }
+        .settings-form .field .toggle input:checked + .slider:before { transform:translateX(18px); }
+        .settings-form .result {
+            margin-top:6px; padding:8px 12px; border-radius:6px; font-size:12.5px;
+            display:none;
+        }
+        .settings-form .result.ok  { display:block; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; }
+        .settings-form .result.err { display:block; background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
+        .settings-form .loading-tip { font-size:12.5px; color:#94a3b8; text-align:center; padding:18px 0; }
+        .settings-form .actions {
+            display:flex; justify-content:flex-end; gap:8px; margin-top:14px;
+        }
+        .settings-form .actions button {
+            padding:7px 18px; border-radius:6px; font-size:13px; cursor:pointer;
+            border:1px solid #cbd5e1; background:#fff; color:#0f172a;
+        }
+        .settings-form .actions button.primary {
+            background:#2563eb; color:#fff; border-color:#2563eb;
+        }
+        .settings-form .actions button:disabled { opacity:.55; cursor:not-allowed; }
     </style>
 </head>
 <body>
@@ -222,6 +291,7 @@
         <button onclick="exportCsv()">⬇ CSV</button>
         <button onclick="exportJson()">⬇ JSON</button>
         <button class="wechat-btn" onclick="openWechatModal()">💬 企业微信<span class="wechat-badge off" id="wechat-badge"></span></button>
+        <button onclick="openSettingsModal()">⚙️ 设置</button>
     </header>
 
     <div class="tabs">
@@ -301,6 +371,96 @@
         </div>
         <div class="result" id="wechat-result"></div>
         <div class="hint" id="wechat-hint"></div>
+    </div>
+</div>
+
+<!-- ===== 设置面板 ===== -->
+<div class="modal-mask" id="settings-modal" onclick="if(event.target===this)closeSettingsModal()">
+    <div class="modal settings-modal">
+        <h3>
+            <span>⚙️ 系统设置</span>
+            <span class="close" onclick="closeSettingsModal()">×</span>
+        </h3>
+        <div class="settings-form">
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="cfg-collect-interval">收集间隔</label>
+                    <input type="number" id="cfg-collect-interval" min="5" max="300" step="1">
+                    <span class="unit">秒</span>
+                </div>
+                <div class="desc">每隔多少秒拉一次增量日志</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="cfg-initial-tail">首次拉取行数</label>
+                    <input type="number" id="cfg-initial-tail" min="10" max="50000" step="1">
+                    <span class="unit">行</span>
+                </div>
+                <div class="desc">首次启动时每个容器拉取最近 N 行</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="cfg-stream-enabled">实时流</label>
+                    <label class="toggle">
+                        <input type="checkbox" id="cfg-stream-enabled">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="desc">开启后每容器一条常驻线程，CPU 会上升</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="cfg-retention-days">日志保留天数</label>
+                    <input type="number" id="cfg-retention-days" min="1" max="365" step="1">
+                    <span class="unit">天</span>
+                </div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="cfg-batch-flush">批量刷盘间隔</label>
+                    <input type="number" id="cfg-batch-flush" min="1" max="30" step="1">
+                    <span class="unit">秒</span>
+                </div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="cfg-batch-max">批量最大条数</label>
+                    <input type="number" id="cfg-batch-max" min="10" max="5000" step="1">
+                    <span class="unit">条</span>
+                </div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="cfg-max-lines-tick">单次最大拉取行数</label>
+                    <input type="number" id="cfg-max-lines-tick" min="100" max="50000" step="1">
+                    <span class="unit">行</span>
+                </div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="cfg-exclude-containers">排除容器</label>
+                    <input type="text" id="cfg-exclude-containers" placeholder="container1,container2">
+                </div>
+                <div class="desc">不收集这些容器的日志（逗号分隔）</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="cfg-web-username">Web 用户名</label>
+                    <input type="text" id="cfg-web-username" autocomplete="username">
+                </div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="cfg-web-password">Web 密码</label>
+                    <input type="password" id="cfg-web-password" autocomplete="new-password" placeholder="留空表示不修改">
+                </div>
+            </div>
+            <div class="result" id="settings-result"></div>
+            <div class="actions">
+                <button onclick="closeSettingsModal()">取消</button>
+                <button class="primary" id="settings-save-btn" onclick="saveSettings()">保存</button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -907,6 +1067,116 @@ fetchWechatStatus().then(s => {
         $('wechat-badge').className = s.enabled ? 'wechat-badge on' : 'wechat-badge off';
     }
 });
+
+/* ================ 设置面板：加载 / 保存配置 ================ */
+const SETTINGS_FIELDS = [
+    {key:'COLLECT_INTERVAL_SEC',    el:'cfg-collect-interval',    type:'number'},
+    {key:'INITIAL_TAIL_LINES',      el:'cfg-initial-tail',        type:'number'},
+    {key:'STREAM_ENABLED',          el:'cfg-stream-enabled',      type:'bool'},
+    {key:'LOG_RETENTION_DAYS',      el:'cfg-retention-days',      type:'number'},
+    {key:'BATCH_FLUSH_SEC',         el:'cfg-batch-flush',         type:'number'},
+    {key:'BATCH_MAX_ENTRIES',       el:'cfg-batch-max',           type:'number'},
+    {key:'MAX_LOG_LINES_PER_TICK',  el:'cfg-max-lines-tick',      type:'number'},
+    {key:'EXCLUDE_CONTAINERS',      el:'cfg-exclude-containers',  type:'text'},
+    {key:'WEB_USERNAME',            el:'cfg-web-username',        type:'text'},
+    {key:'WEB_PASSWORD',            el:'cfg-web-password',        type:'password'},
+];
+
+function openSettingsModal(){
+    $('settings-modal').classList.add('show');
+    const result = $('settings-result');
+    result.className = 'result';
+    result.textContent = '';
+    // 清空密码框（每次打开都不回显）
+    const pwd = $('cfg-web-password'); if(pwd){ pwd.value = ''; pwd.placeholder = '留空表示不修改'; }
+    loadSettings();
+}
+
+function closeSettingsModal(){
+    $('settings-modal').classList.remove('show');
+}
+
+async function loadSettings(){
+    const result = $('settings-result');
+    result.className = 'result';
+    result.textContent = '';
+    try {
+        const resp = await fetch('/api/config');
+        if(!resp.ok){ throw new Error('HTTP ' + resp.status); }
+        const data = await resp.json();
+        SETTINGS_FIELDS.forEach(f => {
+            const el = $(f.el);
+            if(!el) return;
+            const v = data[f.key];
+            if(f.type === 'bool'){
+                el.checked = (v === true || v === 'true' || v === 1 || v === '1');
+            } else if(f.type === 'password'){
+                // 密码不回显；后端若返回密码已设置标记，给出提示
+                el.value = '';
+                const set = data['WEB_PASSWORD_SET'];
+                el.placeholder = (set || (v !== undefined && v !== null && v !== ''))
+                    ? '已设置，留空表示不修改'
+                    : '未设置';
+            } else if(v !== undefined && v !== null){
+                // 数字 / 文本：列表类型(排除容器)转成逗号分隔字符串
+                el.value = Array.isArray(v) ? v.join(',') : String(v);
+            }
+        });
+    } catch(e){
+        result.className = 'result err';
+        result.textContent = '✗ 加载配置失败：' + e.message;
+    }
+}
+
+async function saveSettings(){
+    const result = $('settings-result');
+    const btn = $('settings-save-btn');
+    const payload = {};
+    SETTINGS_FIELDS.forEach(f => {
+        const el = $(f.el);
+        if(!el) return;
+        if(f.type === 'bool'){
+            payload[f.key] = !!el.checked;
+        } else if(f.type === 'number'){
+            const n = Number(el.value);
+            if(el.value !== '' && !isNaN(n)) payload[f.key] = n;
+        } else if(f.type === 'password'){
+            // 密码留空不发送（保持后端原值）
+            if(el.value) payload[f.key] = el.value;
+        } else {
+            // 文本：排除容器支持逗号分隔字符串或数组
+            const raw = el.value.trim();
+            if(raw === ''){ payload[f.key] = []; }
+            else if(raw.includes(',')){ payload[f.key] = raw.split(',').map(s=>s.trim()).filter(Boolean); }
+            else { payload[f.key] = raw; }
+        }
+    });
+    result.className = 'result';
+    result.textContent = '';
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = '保存中…';
+    try {
+        const resp = await fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        if(!resp.ok){
+            let msg = 'HTTP ' + resp.status;
+            try { const j = await resp.json(); msg = j.detail || j.msg || j.message || msg; } catch(_){}
+            throw new Error(msg);
+        }
+        result.className = 'result ok';
+        result.textContent = '✓ 保存成功，部分参数下一轮收集生效';
+    } catch(e){
+        result.className = 'result err';
+        result.textContent = '✗ 保存失败：' + e.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldText;
+    }
+}
 
 loadContainers();
 setInterval(loadContainers, 60000);  // 容器列表 1 分钟刷一次就够
