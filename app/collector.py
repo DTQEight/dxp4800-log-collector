@@ -136,19 +136,49 @@ class LogCollector:
                 # 这样可以避免网络/磁盘卡顿导致漏日志
                 last_ts_unix = self._extract_last_log_unix_ts(lines)
                 written = self._dedupe_and_feed(cid, cname, "pull", lines, initial_pull=initial_pull)
-                if written or n_in:
-                    logger.debug(f"[{cname}] tick 拉 {n_in} 行，写入 {written} 条（批量缓冲中）")
-                if last_ts_unix is not None:
-                    # +1 秒避免下一轮 Docker since= 含等号又把这条重复拉回来
-                    self._container_last_since[cid] = last_ts_unix + 1
-                else:
-                    # 没解析出时间戳，回退用当前时间
-                    self._container_last_since[cid] = time.time()
+
+                # ===== 关键修复：written > 0 才推进 since =====
+                # 如果拉了 n_in 行但 written=0（全部解析失败/重复），
+                # 一旦推进 since 就会导致 since>实际日志时间，后续永远拉不到新日志。
+                # 这是"前面几个容器有日志，后面的容器永久没日志"的核心根因。
+                if written > 0:
+                    if last_ts_unix is not None:
+                        # +1 秒避免下一轮 Docker since= 含等号又把这条重复拉回来
+                        self._container_last_since[cid] = last_ts_unix + 1
+                    else:
+                        # 有写入但没解析出 Docker 时间戳（极少见），回退用当前时间
+                        self._container_last_since[cid] = time.time()
+                    logger.info(
+                        f"[{cname}] 拉{n_in}行→写入{written}条, since={int(self._container_last_since[cid])}",
+                    )
+                elif n_in > 0:
+                    # 拉到了行但一条都没写入 → 解析/去重全部被丢弃
+                    # - initial_pull 首跑：必须给一个 since 锚点避免永远重拉同一批历史
+                    #   优先用能解析到的最后一行真实时间戳+1（未来日志时钟一定>这个值），
+                    #   解析不到再用当前时间兜底（最坏情况=跳过首跑这批老日志，避免死循环）
+                    # - 增量非首跑：保持原 since 不变，防止新日志真正产生时被跳过
+                    if initial_pull:
+                        if last_ts_unix is not None:
+                            self._container_last_since[cid] = last_ts_unix + 1
+                        else:
+                            self._container_last_since[cid] = time.time()
+                        logger.warning(
+                            f"[{cname}] 首跑拉{n_in}行但0条写入(解析失败/重复), "
+                            f"since锚定={int(self._container_last_since[cid])} (last_ts解析={'OK' if last_ts_unix is not None else 'FAIL'}), "
+                            f"样例首尾行: {lines[0][:120]!r} | ... | {lines[-1][:120]!r}",
+                        )
+                    else:
+                        logger.warning(
+                            f"[{cname}] 增量拉{n_in}行但0条写入(全部重复/解析失败), "
+                            f"保持原since不推进, 避免漏日志. 样例行: {lines[0][:120]!r}",
+                        )
+                # else: n_in == 0 但 raw_logs 非空（理论上不会），什么也不做
             else:
                 # 这一轮没新日志，since 保持不变（下一轮继续从老位置拉，防止漏）
                 if initial_pull:
                     # 首跑即使没日志也要打个桩，避免下次还走 initial_pull
                     self._container_last_since[cid] = time.time()
+                    logger.info(f"[{cname}] 首跑无日志, since打桩={int(self._container_last_since[cid])}")
 
             # （可选）启动实时流监听
             if Config.STREAM_ENABLED and (
