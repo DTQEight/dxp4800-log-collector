@@ -85,22 +85,28 @@ def create_app() -> Flask:
     def api_containers():
         """返回实时运行的容器列表（来自Docker API）"""
         try:
-            live = DockerClient.get_instance().list_running_containers()
+            live_all = DockerClient.get_instance().list_running_containers()
+            # 过滤掉被排除的容器（默认排除自身 dxp4800-log-collector）
+            live = [c for c in live_all if not c.get("exclude")]
             live_ids = {c["id"] for c in live}
             db = models.list_containers()
-            # 合并：加上DB中已停过的历史容器
+            # 合并：加上DB中已停过的历史容器（也排除掉 EXCLUDE_CONTAINERS）
+            excludes = set(Config.EXCLUDE_CONTAINERS or [])
             seen = live_ids.copy()
             for c in db:
-                if c["id"] not in seen:
-                    live.append({
-                        "id": c["id"],
-                        "name": c["name"],
-                        "image": c.get("image"),
-                        "status": "exited",
-                        "first_seen": c.get("first_seen"),
-                        "last_seen": c.get("last_seen"),
-                    })
-                    seen.add(c["id"])
+                if c["id"] in seen:
+                    continue
+                if c.get("name") in excludes:
+                    continue
+                live.append({
+                    "id": c["id"],
+                    "name": c["name"],
+                    "image": c.get("image"),
+                    "status": "exited",
+                    "first_seen": c.get("first_seen"),
+                    "last_seen": c.get("last_seen"),
+                })
+                seen.add(c["id"])
             return jsonify(live)
         except Exception as e:
             logger.exception("获取容器列表失败")
