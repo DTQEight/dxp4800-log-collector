@@ -38,7 +38,7 @@ class DockerClient:
             raise RuntimeError(f"未安装 docker SDK（pip install docker）: {e}") from e
 
         try:
-            base_url = "unix:///var/run/docker.sock"
+            base_url = Config.DOCKER_SOCKET
             self._client = docker.DockerClient(base_url=base_url, version="auto", timeout=30)
             self._client.ping()
             logger.info("Docker API连接成功")
@@ -56,7 +56,7 @@ class DockerClient:
             try:
                 import docker  # type: ignore[import-not-found]
                 self._client = docker.DockerClient(
-                    base_url="unix:///var/run/docker.sock", version="auto", timeout=30,
+                    base_url=Config.DOCKER_SOCKET, version="auto", timeout=30,
                 )
                 self._client.ping()
                 logger.info("Docker API重连成功")
@@ -87,6 +87,7 @@ class DockerClient:
                     "image": (attrs.get("Config") or {}).get("Image") or "",
                     "status": state.get("Status") or "running",
                     "created": attrs.get("Created") or "",
+                    # CPU% 需额外 stats() 两次采样调用，list 场景性能代价过高，暂不计算
                     "cpu_percent": 0.0,
                     "memory_usage": mem_current,
                     "memory_limit": mem_limit,

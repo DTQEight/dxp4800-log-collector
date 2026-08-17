@@ -1,16 +1,17 @@
-import io
 import csv
 import json
 import os
 import time
+import secrets
 import threading
 import logging
 from functools import wraps
+from datetime import timedelta
 from flask import (
-    Flask, render_template, request, jsonify, Response, abort,
+    Flask, render_template, request, jsonify, Response,
     send_from_directory, session, redirect, url_for, stream_with_context
 )
-from app.config import Config
+from app.config import Config, _verify_password
 from app.docker_client import DockerClient
 from app.storage import LogStorage
 from app import models
@@ -24,7 +25,14 @@ def create_app() -> Flask:
         template_folder="../templates",
         static_folder="../static",
     )
-    app.secret_key = "dxp4800-log-secret-key"
+    app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
+    # Session 12 小时后自动过期
+    app.permanent_session_lifetime = timedelta(hours=12)
+
+    # ---------- 登录尝试限制（内存计数，防暴力破解） ----------
+    _login_attempts: dict[str, list] = {}  # ip -> [count, first_attempt_ts]
+    _LOGIN_MAX_ATTEMPTS = 5
+    _LOGIN_WINDOW_SEC = 300  # 5 分钟窗口
 
     # ---------- 全局异常处理器：/api/* 路径永远返回 JSON，不返回 Flask 默认 HTML 500 页 ----------
     @app.errorhandler(Exception)
@@ -60,11 +68,31 @@ def create_app() -> Flask:
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if request.method == "POST":
+            ip = request.remote_addr or "unknown"
+            now_ts = time.time()
+            # 检查登录尝试限制
+            attempts = _login_attempts.get(ip)
+            if attempts:
+                count, first_ts = attempts
+                if now_ts - first_ts < _LOGIN_WINDOW_SEC and count >= _LOGIN_MAX_ATTEMPTS:
+                    remain = int(_LOGIN_WINDOW_SEC - (now_ts - first_ts))
+                    return render_template("login.html", error=f"登录失败次数过多，请 {remain} 秒后再试"), 429
+                elif now_ts - first_ts >= _LOGIN_WINDOW_SEC:
+                    # 窗口过期，重置
+                    _login_attempts[ip] = [0, now_ts]
+
             u = request.form.get("username")
             p = request.form.get("password")
-            if u == Config.WEB_USERNAME and p == Config.WEB_PASSWORD:
+            if u == Config.WEB_USERNAME and _verify_password(p, Config.WEB_PASSWORD):
+                session.permanent = True
                 session["logged_in"] = True
+                _login_attempts.pop(ip, None)
                 return redirect(url_for("index"))
+            # 记录失败
+            if ip not in _login_attempts or now_ts - _login_attempts.get(ip, [0, now_ts])[1] >= _LOGIN_WINDOW_SEC:
+                _login_attempts[ip] = [1, now_ts]
+            else:
+                _login_attempts[ip][0] += 1
             return render_template("login.html", error="用户名或密码错误")
         return render_template("login.html")
 
@@ -294,6 +322,62 @@ def create_app() -> Flask:
             "include_containers": Config.WECHAT_WORK_INCLUDE_CONTAINERS,
             "proxy_configured": bool(Config.WECHAT_WORK_PROXY_URL),
         })
+
+    # ---------- API: 数据库日志检索 + 导出 ----------
+    @app.route("/api/logs/search")
+    @login_required
+    def api_search_logs():
+        container_id = request.args.get("container_id") or None
+        container_name = request.args.get("container_name") or None
+        keyword = request.args.get("keyword") or None
+        start_time = request.args.get("start_time") or None
+        end_time = request.args.get("end_time") or None
+        fmt = request.args.get("format", "json")
+        limit = request.args.get("limit", type=int, default=500)
+        offset = request.args.get("offset", type=int, default=0)
+
+        # 导出场景放宽上限
+        if fmt in ("csv", "json_download"):
+            limit = min(max(limit, 1), 50000)
+        else:
+            limit = min(max(limit, 1), 5000)
+
+        rows = models.search_logs(
+            container_id=container_id,
+            container_name=container_name,
+            keyword=keyword,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+            offset=offset,
+        )
+
+        if fmt == "csv":
+            import io as _io
+            buf = _io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["timestamp", "container_name", "source", "content"])
+            for r in rows:
+                writer.writerow([
+                    r.get("timestamp", ""),
+                    r.get("container_name", ""),
+                    r.get("source", ""),
+                    r.get("content", ""),
+                ])
+            return Response(
+                buf.getvalue(),
+                mimetype="text/csv; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=logs.csv"},
+            )
+
+        if fmt == "json_download":
+            return Response(
+                json.dumps(rows, ensure_ascii=False, indent=2),
+                mimetype="application/json; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=logs.json"},
+            )
+
+        return jsonify(rows)
 
     # ---------- API: 运行时配置（UI 可调参数）----------
     @app.route("/api/config", methods=["GET"])

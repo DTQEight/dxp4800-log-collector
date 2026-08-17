@@ -1,4 +1,5 @@
 import os
+import hashlib
 from datetime import timezone, timedelta
 from dotenv import load_dotenv
 
@@ -135,6 +136,24 @@ _RUNTIME_CONFIG_PATH = os.path.join(
     "runtime_config.json",
 )
 
+# 密码最小长度
+WEB_PASSWORD_MIN_LEN = 6
+
+
+def _hash_password(pwd: str) -> str:
+    """对密码做 SHA-256 哈希，返回带前缀的字符串以便区分明文/哈希。"""
+    h = hashlib.sha256(("dxp4800:" + pwd).encode("utf-8")).hexdigest()
+    return f"sha256:{h}"
+
+
+def _verify_password(input_pwd: str, stored: str) -> bool:
+    """校验密码：stored 以 sha256: 开头则哈希比对，否则明文比对（兼容环境变量传入的明文）。"""
+    if not stored:
+        return False
+    if stored.startswith("sha256:"):
+        return _hash_password(input_pwd) == stored
+    return input_pwd == stored
+
 # UI 可调参数的键名 + 类型转换函数（不含企业微信模块）
 UI_ADJUSTABLE = {
     "COLLECT_INTERVAL_SEC":    int,
@@ -189,6 +208,14 @@ def save_runtime_config(updates: dict) -> dict:
         try:
             if key == "EXCLUDE_CONTAINERS":
                 setattr(Config, key, [c.strip() for c in str(val).split(",") if c.strip()])
+            elif key == "WEB_PASSWORD":
+                # 密码强度校验
+                pwd_str = str(val)
+                if len(pwd_str) < WEB_PASSWORD_MIN_LEN:
+                    rejected.append(key)
+                    continue
+                # 存哈希而非明文，防止 runtime_config.json 泄露密码
+                setattr(Config, key, _hash_password(pwd_str))
             elif UI_ADJUSTABLE[key] is int:
                 setattr(Config, key, int(val))
             elif UI_ADJUSTABLE[key] is float:
@@ -217,7 +244,7 @@ def save_runtime_config(updates: dict) -> dict:
 
 
 def get_ui_config() -> dict:
-    """返回 UI 可调参数的当前值（给前端用）。"""
+    """返回 UI 可调参数的当前值（给前端用）。密码不返回真实值，只返回是否已设置。"""
     return {
         "COLLECT_INTERVAL_SEC":    Config.COLLECT_INTERVAL_SEC,
         "INITIAL_TAIL_LINES":      Config.INITIAL_TAIL_LINES,
@@ -227,7 +254,8 @@ def get_ui_config() -> dict:
         "MAX_LOG_LINES_PER_TICK":  Config.MAX_LOG_LINES_PER_TICK,
         "EXCLUDE_CONTAINERS":      ",".join(Config.EXCLUDE_CONTAINERS),
         "WEB_USERNAME":            Config.WEB_USERNAME,
-        "WEB_PASSWORD":            Config.WEB_PASSWORD,
+        "WEB_PASSWORD":            "",
+        "WEB_PASSWORD_SET":        bool(Config.WEB_PASSWORD),
     }
 
 

@@ -493,12 +493,12 @@ async function loadContainers(){
             div.innerHTML = `
                 <div class="n">${c.name}</div>
                 <div class="s"><span><span class="status-dot ${isRun?'run':''}"></span>${c.status}</span><span>${(c.image||'').split('/').pop()}</span></div>`;
-            div.onclick = ()=>selectContainer(c.id,c.name);
+            div.onclick = (ev)=>selectContainer(c.id,c.name,ev);
             box.appendChild(div);
         });
     } catch(e){ console.warn(e); }
 }
-function selectContainer(id,name){
+function selectContainer(id,name,ev){
     if(currentCid===id) return;               // 点同一个不重复
     // 取消之前正在执行的 tail 请求（防止旧请求晚到覆盖新内容）
     if(lastLiveAbort){ try{ lastLiveAbort.abort(); }catch(_){} }
@@ -511,7 +511,7 @@ function selectContainer(id,name){
 
     currentCid=id; currentName=name;
     document.querySelectorAll('.ctn').forEach(e=>e.classList.remove('active'));
-    event.currentTarget.classList.add('active');
+    if(ev && ev.currentTarget) ev.currentTarget.classList.add('active');
     $('page-title').textContent = name;
 
     // 立即显示占位文本（避免界面看起来"卡死"）

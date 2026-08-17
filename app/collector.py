@@ -45,7 +45,11 @@ class LogCollector:
         # ====== json-log 直读（唯一通道）======
         self._json_reader: JsonLogReader | None = None
         if Config.USE_JSON_LOG_READER:
-            reader = JsonLogReader(Config.DOCKER_CONTAINERS_PATH, Config.INITIAL_TAIL_LINES)
+            reader = JsonLogReader(
+                Config.DOCKER_CONTAINERS_PATH,
+                Config.INITIAL_TAIL_LINES,
+                Config.MAX_LOG_LINES_PER_TICK,
+            )
             if reader.is_available():
                 self._json_reader = reader
                 logger.info("json-log 直读已启用: %s", Config.DOCKER_CONTAINERS_PATH)
@@ -134,7 +138,7 @@ class LogCollector:
         allow_notify = (not initial_pull) or Config.WECHAT_WORK_NOTIFY_ON_INIT
         first_error: tuple[str, str] | None = None
 
-        parsed = [LogStorage._parse_line(ln) for ln in lines]  # type: ignore[attr-defined]
+        parsed = [LogStorage.parse_line(ln) for ln in lines]
         with self._buf_lock:
             q = self._line_buffers.get(cname)
             if q is None:

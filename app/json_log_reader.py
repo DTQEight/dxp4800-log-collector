@@ -22,9 +22,10 @@ logger = logging.getLogger(__name__)
 class JsonLogReader:
     """按容器 ID 直接读取宿主机上的 json-log 文件，用文件 offset 做增量。"""
 
-    def __init__(self, containers_dir: str, initial_tail_lines: int):
+    def __init__(self, containers_dir: str, initial_tail_lines: int, max_lines_per_tick: int = 0):
         self._dir = containers_dir
         self._initial_tail = initial_tail_lines
+        self._max_lines_per_tick = max_lines_per_tick
         # key: container_id -> 上次读到的文件 offset（字节数）
         self._offsets: dict[str, int] = {}
         # key: container_id -> 上次读的文件路径（检测轮转/路径变化）
@@ -95,10 +96,17 @@ class JsonLogReader:
             self._offsets[cid] = start
             return [], start, is_initial
 
+        # 限制单次读取的最大字节数（防一次拉几百MB把NAS拉爆）
+        # 按估算每行 1024 字节计算，超出部分留到下一轮读取
+        read_size = file_size - start
+        if self._max_lines_per_tick > 0:
+            max_bytes = self._max_lines_per_tick * 1024
+            read_size = min(read_size, max_bytes)
+
         try:
             with open(fpath, "rb") as f:
                 f.seek(start)
-                chunk = f.read()
+                chunk = f.read(read_size)
         except OSError as e:
             logger.warning(f"[{cname}] 读 json-log 失败: {e}")
             return None

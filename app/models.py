@@ -86,7 +86,7 @@ def init_db():
         """)
         # 覆盖 content 的 FTS5 索引会让 LIKE '%keyword%' 更快，但会占更多空间且需要额外写入
         # 对嵌入式低CPU场景，保持简单B树索引就好
-    logger.info("数据库初始化完成 (WAL+NOMRAL)")
+    logger.info("数据库初始化完成 (WAL+NORMAL)")
 
 
 def upsert_container(container_info: dict):

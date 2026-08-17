@@ -1,5 +1,6 @@
 import os
 import re
+from collections import OrderedDict
 from datetime import datetime, date
 from app.config import Config
 import logging
@@ -33,7 +34,8 @@ APP_TS_PATTERN = re.compile(
 #  容器 B 进来时 cached_date==today 直接返回 A 的目录，
 #  导致 B 的日志写到 A 的文件里，B 自己的目录永远不创建)
 # key: container_name  value: (date_obj, dir_path, file_path)
-_TODAY_CACHE: dict[str, tuple] = {}
+_TODAY_CACHE: OrderedDict[str, tuple] = OrderedDict()
+_TODAY_CACHE_MAX = 500
 
 
 def strip_ansi(text: str) -> str:
@@ -96,19 +98,20 @@ class LogStorage:
         today = today_local()
         cached = _TODAY_CACHE.get(container_name)
         if cached and cached[0] == today:
+            # LRU：移到末尾（最近使用）
+            _TODAY_CACHE.move_to_end(container_name)
             return cached[1], cached[2]
         d = os.path.join(Config.LOG_STORAGE_PATH, container_name)
         os.makedirs(d, exist_ok=True)
         fp = os.path.join(d, f"{today.isoformat()}.log")
         _TODAY_CACHE[container_name] = (today, d, fp)
-        # 日期翻转后，顺便清理一下昨天的过期缓存（保留 31 天以上安全，这里简单防内存泄漏）
-        if len(_TODAY_CACHE) > 500:
-            _TODAY_CACHE.clear()
-            _TODAY_CACHE[container_name] = (today, d, fp)
+        # LRU 淘汰：超过上限时淘汰最久未使用的（而非全部清空）
+        while len(_TODAY_CACHE) > _TODAY_CACHE_MAX:
+            _TODAY_CACHE.popitem(last=False)
         return d, fp
 
     @staticmethod
-    def _parse_line(raw_line: str):
+    def parse_line(raw_line: str):
         """(ts_local_iso, content) — 剥掉 Docker UTC 前缀 + ANSI 颜色码 + 应用重复时间戳"""
         raw_line = raw_line.rstrip("\r\n")
         if not raw_line:
@@ -149,7 +152,7 @@ class LogStorage:
             line = raw.rstrip("\r\n")
             if not line:
                 continue
-            ts, content = LogStorage._parse_line(line)
+            ts, content = LogStorage.parse_line(line)
             chunks.append(f"[{ts}] {content}\n")
             timestamps.append(ts)
             contents.append(content)
