@@ -41,6 +41,13 @@ class LogCollector:
 
         self._flush_thread: threading.Thread | None = None
 
+        # ====== 企业微信通知：每容器冷却 + 异步发送 ======
+        # key: container_name -> 最近一次通知的 monotonic 时间戳
+        self._wechat_notify_lock = threading.Lock()
+        self._wechat_last_notify: dict[str, float] = {}
+        # 同一容器冷却期内累积的错误行数（用于通知正文里提示"还有 N 条同类错误"）
+        self._wechat_pending_count: dict[str, int] = {}
+
     # ---------------- 主循环 ----------------
     def run_foreground(self):
         logger.info(
@@ -167,6 +174,8 @@ class LogCollector:
         if not lines:
             return 0
         written = 0
+        # 本轮命中的第一条错误日志（用于通知正文）；同一轮里多条同类只取首条做样本
+        first_error: tuple[str, str] | None = None   # (ts_iso, content)
         # 先一次性把所有行解析好（单遍，避免重复 parse）
         parsed = [LogStorage._parse_line(ln) for ln in lines]  # type: ignore[attr-defined]
         with self._buf_lock:
@@ -184,10 +193,103 @@ class LogCollector:
                 self._db_rows.append((cid, cname, ts, source, content))
                 written += 1
 
+                # 错误日志检测（在锁内只做轻量的字符串包含判断，不发 IO）
+                if first_error is None and self._is_error_line(cname, content):
+                    first_error = (ts, content)
+
             # 超过批量阈值就触发 flush（但在 flush_loop 里执行更稳，这里只做 hint）
             if len(self._db_rows) >= Config.BATCH_MAX_ENTRIES:
                 pass   # flush_loop 会在下一 tick 处理，不在持锁时做 IO
+
+        # 锁外触发通知（异步，不阻塞收集主循环）
+        if first_error is not None:
+            self._maybe_notify_error(cname, first_error[0], first_error[1])
         return written
+
+    # ---------------- 企业微信错误通知 ----------------
+    def _is_error_line(self, cname: str, content: str) -> bool:
+        """判断这行日志是否命中错误关键字。
+
+        - 关闭通知 / 未配置关键字 → 直接 False
+        - 配置了 INCLUDE_CONTAINERS 白名单时，只对白名单内的容器报警
+        """
+        if not Config.WECHAT_WORK_ENABLED:
+            return False
+        if not Config.WECHAT_WORK_ERROR_KEYWORDS:
+            return False
+        # 白名单：如果配置了，不在白名单内的容器不报警
+        if Config.WECHAT_WORK_INCLUDE_CONTAINERS and cname not in Config.WECHAT_WORK_INCLUDE_CONTAINERS:
+            return False
+        if not content:
+            return False
+        # 全部小写比对，让 ERROR/Err/err 都能命中
+        lowered = content.lower()
+        return any(kw.lower() in lowered for kw in Config.WECHAT_WORK_ERROR_KEYWORDS)
+
+    def _maybe_notify_error(self, cname: str, ts_iso: str, content: str) -> None:
+        """带每容器冷却的错误通知触发器。
+
+        - 冷却期内不重复发送，只累计 pending_count，等下次冷却到期后第一条新错误带"还有 N 条"一起发。
+        - 实际发送放后台线程，避免阻塞日志收集主循环。
+        """
+        if not Config.WECHAT_WORK_ENABLED:
+            return
+        try:
+            from app.wechat_work import send_wechat_message
+        except Exception as e:   # 模块加载失败也不能影响日志收集
+            logger.warning(f"加载 wechat_work 模块失败: {e}")
+            return
+
+        now_mono = time.monotonic()
+        cooldown = max(1, Config.WECHAT_WORK_COOLDOWN_SEC)
+
+        with self._wechat_notify_lock:
+            last = self._wechat_last_notify.get(cname, 0.0)
+            in_cooldown = (now_mono - last) < cooldown
+            # 累计 pending（无论是否在冷却期，都把这一条记上）
+            pending = self._wechat_pending_count.get(cname, 0) + 1
+            self._wechat_pending_count[cname] = pending
+            if in_cooldown:
+                # 还在冷却里，跳过；等下次冷却到期再发
+                return
+            # 出冷却了：本次发送，并清零 pending（包含本次这条）
+            self._wechat_last_notify[cname] = now_mono
+            self._wechat_pending_count[cname] = 0
+            extra_count = pending - 1   # 本轮累计、除本次首条外还有多少条同类错误
+
+        # 截断正文，避免单行超长把整条通知撑爆
+        max_len = max(50, Config.WECHAT_WORK_MAX_CONTENT_LEN)
+        body = content if len(content) <= max_len else content[:max_len] + "…"
+
+        msg_lines = [
+            "【Docker 日志告警】",
+            f"容器: {cname}",
+            f"时间: {ts_iso}",
+        ]
+        if extra_count > 0:
+            msg_lines.append(f"近 {Config.WECHAT_WORK_COOLDOWN_SEC}s 内同类错误: {extra_count + 1} 条（仅展示首条）")
+        msg_lines.append("内容:")
+        msg_lines.append(body)
+        message = "\n".join(msg_lines)
+
+        threading.Thread(
+            target=self._send_wechat_async,
+            args=(message,),
+            name=f"wechat-notify-{cname[:12]}",
+            daemon=True,
+        ).start()
+
+    def _send_wechat_async(self, message: str) -> None:
+        """后台线程：实际调用企业微信 API，失败只记日志，不影响收集器。"""
+        try:
+            from app.wechat_work import send_wechat_message
+            ok, msg = send_wechat_message(message)
+            if ok:
+                logger.info(f"企业微信通知发送成功: {msg}")
+            else:
+                logger.warning(f"企业微信通知发送失败: {msg}")
+        except Exception as e:
+            logger.error(f"企业微信通知异常: {e}")
 
     # ---------------- flush 线程（核心：每 N 秒 / 超过条数 批量落盘） ----------------
     def _flush_loop(self):

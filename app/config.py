@@ -85,3 +85,37 @@ class Config:
     WEB_PASSWORD = os.getenv("WEB_PASSWORD", "admin123")
 
     DB_PATH = os.getenv("DB_PATH", "/app/data/logs.db")
+
+    # ===== 企业微信通知（监控错误日志，推送到企业微信）=====
+    # 总开关：默认关闭，配置好 corpid/corpsecret/agentid 后再开启
+    WECHAT_WORK_ENABLED = _bool("WECHAT_WORK_ENABLED", False)
+    # 企业 ID（my-enterprise -> 企业信息 -> 企业ID）
+    WECHAT_WORK_CORPID = os.getenv("WECHAT_WORK_CORPID", "")
+    # 应用的 Secret（自建应用 -> Secret）
+    WECHAT_WORK_CORPSECRET = os.getenv("WECHAT_WORK_CORPSECRET", "")
+    # 应用的 AgentId（自建应用 -> AgentId，必须是整数）
+    WECHAT_WORK_AGENTID = int(os.getenv("WECHAT_WORK_AGENTID", "0") or "0")
+    # 接收人：@all 表示全员，也可填指定用户ID（多个用 | 分隔，如 user1|user2）
+    WECHAT_WORK_TOUSER = os.getenv("WECHAT_WORK_TOUSER", "@all")
+    # 可选：HTTP 代理（NAS 不能直连公网时使用），如 http://192.168.31.1:7890
+    WECHAT_WORK_PROXY_URL = os.getenv("WECHAT_WORK_PROXY_URL", "")
+    # 错误关键字（逗号分隔）：日志内容命中任一关键字就触发通知
+    # 默认覆盖常见日志级别 + 异常堆栈特征
+    WECHAT_WORK_ERROR_KEYWORDS = [
+        kw.strip()
+        for kw in os.getenv(
+            "WECHAT_WORK_ERROR_KEYWORDS",
+            "ERROR,ERR,FATAL,PANIC,Exception,Traceback,Failed,failed,Out of memory,OOM",
+        ).split(",")
+        if kw.strip()
+    ]
+    # 单容器通知冷却（秒）：同一容器在该窗口内只推一条通知，避免错误日志洪水
+    WECHAT_WORK_COOLDOWN_SEC = int(os.getenv("WECHAT_WORK_COOLDOWN_SEC", "60"))
+    # 单条通知正文最大长度（企业微信 text 消息上限 2048 字节，留点给前缀）
+    WECHAT_WORK_MAX_CONTENT_LEN = int(os.getenv("WECHAT_WORK_MAX_CONTENT_LEN", "1500"))
+    # 可选：只监控指定容器（逗号分隔，留空=全部容器）。例如 go2rtc,frpc
+    WECHAT_WORK_INCLUDE_CONTAINERS = [
+        c.strip()
+        for c in os.getenv("WECHAT_WORK_INCLUDE_CONTAINERS", "").split(",")
+        if c.strip()
+    ]

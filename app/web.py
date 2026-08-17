@@ -257,4 +257,45 @@ def create_app() -> Flask:
                 logger.error(f"collect_now 触发失败: {e}")
         return jsonify({"ok": ok})
 
+    # ---------- API: 企业微信通知测试 ----------
+    @app.route("/api/wechat/test", methods=["POST"])
+    @login_required
+    def api_wechat_test():
+        """手动触发一条测试通知，验证 corpid/corpsecret/agentid 配置是否正确。
+
+        body 可选: {"message": "自定义测试内容"}；不传则发默认测试消息。
+        """
+        if not Config.WECHAT_WORK_ENABLED:
+            return jsonify({"ok": False, "msg": "未启用企业微信通知 (WECHAT_WORK_ENABLED=false)"}), 400
+        try:
+            from app.wechat_work import send_wechat_message
+            payload = request.get_json(silent=True) or {}
+            custom = (payload.get("message") or "").strip()
+            message = custom or (
+                "【DXP4800 日志中心测试通知】\n"
+                "这是一条来自 dxp4800-log-collector 的测试消息。\n"
+                "如果你收到了，说明企业微信通知配置正确。"
+            )
+            ok, msg = send_wechat_message(message)
+            return jsonify({"ok": ok, "msg": msg})
+        except Exception as e:
+            logger.exception("企业微信测试通知异常")
+            return jsonify({"ok": False, "msg": str(e)}), 500
+
+    @app.route("/api/wechat/status", methods=["GET"])
+    @login_required
+    def api_wechat_status():
+        """返回企业微信通知的当前配置状态（不暴露 secret），供前端显示。"""
+        return jsonify({
+            "enabled": Config.WECHAT_WORK_ENABLED,
+            "corpid_configured": bool(Config.WECHAT_WORK_CORPID),
+            "corpsecret_configured": bool(Config.WECHAT_WORK_CORPSECRET),
+            "agentid": Config.WECHAT_WORK_AGENTID,
+            "to_user": Config.WECHAT_WORK_TOUSER,
+            "error_keywords": Config.WECHAT_WORK_ERROR_KEYWORDS,
+            "cooldown_sec": Config.WECHAT_WORK_COOLDOWN_SEC,
+            "include_containers": Config.WECHAT_WORK_INCLUDE_CONTAINERS,
+            "proxy_configured": bool(Config.WECHAT_WORK_PROXY_URL),
+        })
+
     return app

@@ -20,6 +20,26 @@ services:
       - COLLECT_INTERVAL_SEC=60
       # 不需要收集日志的容器名（逗号分隔），默认排除自身
       # - EXCLUDE_CONTAINERS=dxp4800-log-collector
+
+      # ===== 企业微信通知（监控错误日志，推送到企业微信） =====
+      # 总开关：true 启用 / false 关闭（默认关闭，配置好下面三项再开启）
+      - WECHAT_WORK_ENABLED=false
+      # 企业ID（企业微信管理后台 -> 我的企业 -> 企业信息 -> 企业ID）
+      - WECHAT_WORK_CORPID=
+      # 应用Secret（自建应用 -> Secret；注意：仅创建时可见，需记好）
+      - WECHAT_WORK_CORPSECRET=
+      # 应用AgentId（自建应用 -> AgentId，整数）
+      - WECHAT_WORK_AGENTID=0
+      # 接收人：@all 表示全员，也可填指定用户ID，多个用 | 分隔（如 user1|user2）
+      - WECHAT_WORK_TOUSER=@all
+      # 错误关键字（逗号分隔）：日志命中任一关键字就触发通知
+      - WECHAT_WORK_ERROR_KEYWORDS=ERROR,ERR,FATAL,PANIC,Exception,Traceback,Failed,failed,Out of memory,OOM
+      # 单容器通知冷却（秒）：同一容器在该窗口内只推一条，避免错误日志洪水
+      - WECHAT_WORK_COOLDOWN_SEC=60
+      # 可选：只监控指定容器（逗号分隔，留空=全部容器），如 go2rtc,frpc
+      # - WECHAT_WORK_INCLUDE_CONTAINERS=
+      # 可选：HTTP 代理（NAS 不能直连公网时使用），如 http://192.168.31.1:7890
+      # - WECHAT_WORK_PROXY_URL=
     volumes:
       # 必须：挂载 Docker socket，才能读取 NAS 上所有容器的日志
       - /var/run/docker.sock:/var/run/docker.sock:ro
