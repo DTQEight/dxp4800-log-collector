@@ -28,7 +28,12 @@ APP_TS_PATTERN = re.compile(
     r")\s*"
 )
 
-_TODAY_CACHE = (None, "", "")  # (date_obj, dir_path, file_path)
+# 按容器分别缓存今天的 dir_path / file_path，避免跨容器串写。
+# (之前是全局单值：容器 A 写过一次后缓存了 A 的目录，
+#  容器 B 进来时 cached_date==today 直接返回 A 的目录，
+#  导致 B 的日志写到 A 的文件里，B 自己的目录永远不创建)
+# key: container_name  value: (date_obj, dir_path, file_path)
+_TODAY_CACHE: dict[str, tuple] = {}
 
 
 def strip_ansi(text: str) -> str:
@@ -89,13 +94,17 @@ class LogStorage:
     def _today_paths(container_name: str):
         global _TODAY_CACHE
         today = today_local()
-        cached_date, cached_dir, cached_file = _TODAY_CACHE
-        if cached_date == today and cached_dir.endswith(container_name):
-            return cached_dir, cached_file
+        cached = _TODAY_CACHE.get(container_name)
+        if cached and cached[0] == today:
+            return cached[1], cached[2]
         d = os.path.join(Config.LOG_STORAGE_PATH, container_name)
         os.makedirs(d, exist_ok=True)
         fp = os.path.join(d, f"{today.isoformat()}.log")
-        _TODAY_CACHE = (today, d, fp)
+        _TODAY_CACHE[container_name] = (today, d, fp)
+        # 日期翻转后，顺便清理一下昨天的过期缓存（保留 31 天以上安全，这里简单防内存泄漏）
+        if len(_TODAY_CACHE) > 500:
+            _TODAY_CACHE.clear()
+            _TODAY_CACHE[container_name] = (today, d, fp)
         return d, fp
 
     @staticmethod
