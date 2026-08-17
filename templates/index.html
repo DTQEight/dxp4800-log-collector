@@ -149,6 +149,61 @@
             animation: spin .8s linear infinite; vertical-align:-2px; margin-right:6px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ===== 企业微信按钮 + 弹窗 ===== */
+        .wechat-btn {
+            background:#07c160 !important; color:#fff !important;
+            border-color:#07c160 !important;
+        }
+        .wechat-btn:hover { filter:brightness(.95); }
+        .wechat-badge {
+            display:inline-block; width:8px; height:8px; border-radius:50%;
+            background:#94a3b8; vertical-align:middle; margin-left:5px;
+        }
+        .wechat-badge.on  { background:#22c55e; box-shadow:0 0 4px #22c55e; }
+        .wechat-badge.off { background:#94a3b8; }
+
+        .modal-mask {
+            position:fixed; inset:0; background:rgba(15,23,42,.45);
+            display:none; align-items:center; justify-content:center; z-index:1000;
+        }
+        .modal-mask.show { display:flex; }
+        .modal {
+            background:#fff; border-radius:12px; padding:20px 22px;
+            width:min(560px, 92vw); max-height:88vh; overflow:auto;
+            box-shadow:0 18px 50px rgba(0,0,0,.25);
+        }
+        .modal h3 { margin:0 0 12px 0; font-size:16px; display:flex; justify-content:space-between; align-items:center; }
+        .modal .close { cursor:pointer; color:#94a3b8; font-size:20px; line-height:1; padding:0 4px; }
+        .modal .close:hover { color:#ef4444; }
+        .status-grid {
+            display:grid; grid-template-columns:auto 1fr; gap:6px 14px;
+            font-size:13px; margin:10px 0 16px;
+        }
+        .status-grid .k { color:#64748b; }
+        .status-grid .v { color:#0f172a; word-break:break-all; }
+        .status-grid .v.ok    { color:#16a34a; font-weight:500; }
+        .status-grid .v.warn  { color:#d97706; font-weight:500; }
+        .status-grid .v.bad   { color:#dc2626; font-weight:500; }
+        .modal .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+        .modal .actions input {
+            flex:1; min-width:200px; padding:7px 10px;
+            border:1px solid #cbd5e1; border-radius:6px; font-size:13px;
+        }
+        .modal button {
+            padding:7px 14px; border:1px solid #cbd5e1; background:#fff;
+            border-radius:6px; cursor:pointer; font-size:13px;
+        }
+        .modal button.primary { background:#07c160; color:#fff; border-color:#07c160; }
+        .modal button:disabled { opacity:.55; cursor:not-allowed; }
+        .modal .result {
+            margin-top:12px; padding:10px 12px; border-radius:6px; font-size:12.5px;
+            font-family:Consolas,Menlo,monospace; white-space:pre-wrap; word-break:break-all;
+            display:none;
+        }
+        .modal .result.ok    { display:block; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; }
+        .modal .result.err   { display:block; background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
+        .modal .hint { font-size:11.5px; color:#94a3b8; margin-top:10px; line-height:1.5; }
     </style>
 </head>
 <body>
@@ -166,6 +221,7 @@
         <button id="btn-live"   onclick="liveTail()">📡 实时日志</button>
         <button onclick="exportCsv()">⬇ CSV</button>
         <button onclick="exportJson()">⬇ JSON</button>
+        <button class="wechat-btn" onclick="openWechatModal()">💬 企业微信<span class="wechat-badge off" id="wechat-badge"></span></button>
     </header>
 
     <div class="tabs">
@@ -228,6 +284,25 @@
         </div>
     </div>
 </main>
+
+<!-- ===== 企业微信测试 / 状态弹窗 ===== -->
+<div class="modal-mask" id="wechat-modal" onclick="if(event.target===this)closeWechatModal()">
+    <div class="modal">
+        <h3>
+            <span>💬 企业微信通知</span>
+            <span class="close" onclick="closeWechatModal()">×</span>
+        </h3>
+        <div class="status-grid" id="wechat-status-grid">
+            <div class="k">加载中…</div><div class="v"></div>
+        </div>
+        <div class="actions">
+            <input id="wechat-test-msg" placeholder="自定义测试消息（留空发默认测试消息）">
+            <button class="primary" id="wechat-test-btn" onclick="sendWechatTest()">📤 发送测试</button>
+        </div>
+        <div class="result" id="wechat-result"></div>
+        <div class="hint" id="wechat-hint"></div>
+    </div>
+</div>
 
 <script>
 /* -------- 全局状态 -------- */
@@ -681,6 +756,118 @@ function scrollToBottom(){
     const ta = currentTab==='file' ? $('log-view') : $('search-view');
     ta.scrollTop = ta.scrollHeight;
 }
+
+/* ================ 企业微信通知：状态 + 测试 ================ */
+async function fetchWechatStatus(){
+    try {
+        const resp = await fetch('/api/wechat/status');
+        if(!resp.ok) return null;
+        return await resp.json();
+    } catch(e){ return null; }
+}
+
+function renderWechatStatus(s){
+    const badge = $('wechat-badge');
+    const grid = $('wechat-status-grid');
+    const hint = $('wechat-hint');
+    if(!s){
+        badge.className = 'wechat-badge off';
+        grid.innerHTML = '<div class="k">状态</div><div class="v bad">无法获取（后端未响应）</div>';
+        return;
+    }
+    badge.className = s.enabled ? 'wechat-badge on' : 'wechat-badge off';
+
+    // 配置完整度检查
+    const missing = [];
+    if(!s.corpid_configured)     missing.push('CORPID');
+    if(!s.corpsecret_configured) missing.push('CORPSECRET');
+    if(!s.agentid)               missing.push('AGENTID');
+    const cfgOk = missing.length === 0;
+
+    const enabledCls = s.enabled ? (cfgOk ? 'ok' : 'warn') : 'bad';
+    const enabledText = s.enabled
+        ? (cfgOk ? '已启用 ✓' : '已启用，但配置不完整（缺 ' + missing.join(', ') + '）')
+        : '未启用（需在 docker-compose.yml 设 WECHAT_WORK_ENABLED=true）';
+
+    const keywords = (s.error_keywords || []).join(', ') || '（无）';
+    const includes = (s.include_containers || []).join(', ') || '全部容器';
+
+    grid.innerHTML = `
+        <div class="k">开关</div>          <div class="v ${enabledCls}">${enabledText}</div>
+        <div class="k">CorpID</div>        <div class="v ${s.corpid_configured?'ok':'bad'}">${s.corpid_configured?'已配置 ✓':'未配置 ✗'}</div>
+        <div class="k">CorpSecret</div>    <div class="v ${s.corpsecret_configured?'ok':'bad'}">${s.corpsecret_configured?'已配置 ✓':'未配置 ✗'}</div>
+        <div class="k">AgentID</div>       <div class="v ${s.agentid?'ok':'bad'}">${s.agentid||'未配置 ✗'}</div>
+        <div class="k">接收人</div>        <div class="v">${s.to_user||'@all'}</div>
+        <div class="k">错误关键字</div>    <div class="v">${keywords}</div>
+        <div class="k">单容器冷却</div>    <div class="v">${s.cooldown_sec||60} 秒</div>
+        <div class="k">监控范围</div>      <div class="v">${includes}</div>
+        <div class="k">HTTP 代理</div>     <div class="v ${s.proxy_configured?'ok':''}">${s.proxy_configured?'已配置 ✓':'未配置（直连）'}</div>
+    `;
+
+    if(!s.enabled){
+        hint.textContent = '提示：在 docker-compose.yml 的 environment 下设 WECHAT_WORK_ENABLED=true，并填好 CORPID / CORPSECRET / AGENTID，重启容器后点这里发送测试消息。';
+        $('wechat-test-btn').disabled = true;
+    } else if(!cfgOk){
+        hint.textContent = '提示：开关已启用但凭据未配齐，请先在 docker-compose.yml 补上 ' + missing.join(', ') + '。';
+        $('wechat-test-btn').disabled = true;
+    } else {
+        hint.textContent = '点击"发送测试"会立刻通过企业微信 API 发一条消息到接收人。如果收不到，检查：1) 企业微信后台"应用 → 企业可信IP"是否加了你 NAS 的出口 IP；2) 应用"可见范围"是否包含接收人。';
+        $('wechat-test-btn').disabled = false;
+    }
+}
+
+async function openWechatModal(){
+    $('wechat-modal').classList.add('show');
+    $('wechat-result').className = 'result';
+    $('wechat-result').textContent = '';
+    $('wechat-status-grid').innerHTML = '<div class="k">加载中…</div><div class="v"></div>';
+    $('wechat-test-btn').disabled = true;
+    const s = await fetchWechatStatus();
+    renderWechatStatus(s);
+}
+
+function closeWechatModal(){
+    $('wechat-modal').classList.remove('show');
+}
+
+async function sendWechatTest(){
+    const btn = $('wechat-test-btn');
+    const result = $('wechat-result');
+    const customMsg = ($('wechat-test-msg').value || '').trim();
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = '发送中…';
+    result.className = 'result';
+    result.textContent = '';
+    try {
+        const resp = await fetch('/api/wechat/test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(customMsg ? {message: customMsg} : {})
+        });
+        const data = await resp.json();
+        if(data.ok){
+            result.className = 'result ok';
+            result.textContent = '✓ 发送成功\n' + (data.msg || '');
+        } else {
+            result.className = 'result err';
+            result.textContent = '✗ 发送失败\n' + (data.msg || '未知错误');
+        }
+    } catch(e){
+        result.className = 'result err';
+        result.textContent = '✗ 请求异常：' + e;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldText;
+    }
+}
+
+// 页面加载时同步一下徽章颜色（不开弹窗也能看到开关状态）
+fetchWechatStatus().then(s => {
+    if(s){
+        $('wechat-badge').className = s.enabled ? 'wechat-badge on' : 'wechat-badge off';
+    }
+});
 
 loadContainers();
 setInterval(loadContainers, 60000);  // 容器列表 1 分钟刷一次就够
