@@ -37,7 +37,10 @@ class LogCollector:
         self._line_buffers: dict[str, deque] = {}
         self._db_rows: list[tuple] = []          # (cid, cname, ts, source, content)
         self._last_flush_ts = time.monotonic()
-        self._seen_fingerprints: deque[str] = deque(maxlen=5000)   # 最近处理过的 (ts,cid,content) hash
+        # 指纹去重：set 做 O(1) 查重，deque 做 LRU 淘汰（maxlen 满了自动 pop 最老的）
+        # 单 deque + `in` 线性查找是 O(N)，N=5000 时每行查重都很贵，CPU 飙升的元凶
+        self._seen_fp_set: set[str] = set()
+        self._seen_fp_deque: deque[str] = deque(maxlen=5000)
 
         self._flush_thread: threading.Thread | None = None
 
@@ -160,12 +163,28 @@ class LogCollector:
                 if stream is None:
                     time.sleep(backoff); backoff = min(backoff * 2, 30); continue
                 backoff = 1
+                # 批量缓冲：攒够 50 行或 500ms 再一次性 _dedupe_and_feed
+                # 否则每行都走完整流程（解析+hash+锁+查重+append），日志多的容器 CPU 直接飙
+                buf: list[str] = []
+                last_flush = time.monotonic()
                 for line in stream:
                     if self._stop_event.is_set():
                         break
-                    # 单行直接丢进缓冲（flush 时才批量 open/insert）
-                    # stream 永远是实时，initial_pull=False，错误永远会触发通知
-                    self._dedupe_and_feed(container_id, container_name, "stream", [line], initial_pull=False)
+                    if not line:
+                        continue
+                    buf.append(line)
+                    now = time.monotonic()
+                    if len(buf) >= 50 or (now - last_flush) >= 0.5:
+                        self._dedupe_and_feed(
+                            container_id, container_name, "stream", buf, initial_pull=False
+                        )
+                        buf.clear()
+                        last_flush = now
+                # 流正常结束（容器停止等），把残余的刷掉
+                if buf:
+                    self._dedupe_and_feed(
+                        container_id, container_name, "stream", buf, initial_pull=False
+                    )
             except Exception as e:
                 logger.debug(f"[{container_name}] 日志流中断: {e}, {backoff}s后重试")
                 time.sleep(backoff)
@@ -235,9 +254,16 @@ class LogCollector:
                 if ts is None or content is None:
                     continue
                 fp = self._fingerprint(cid, ts, content)
-                if fp in self._seen_fingerprints:
+                if fp in self._seen_fp_set:
                     continue
-                self._seen_fingerprints.append(fp)
+                # O(1) 查重通过，加入 set + deque（deque 满了自动 pop 最老的）
+                self._seen_fp_set.add(fp)
+                self._seen_fp_deque.append(fp)
+                # deque 淘汰了老指纹时，同步从 set 里删掉（保持一致）
+                # deque.maxlen 触发自动 popleft，无法 hook，所以定期对齐
+                if len(self._seen_fp_deque) >= self._seen_fp_deque.maxlen:
+                    # 偶尔（达到上限时）重建 set，避免 set 一直涨
+                    self._seen_fp_set = set(self._seen_fp_deque)
                 q.append(raw)
                 self._db_rows.append((cid, cname, ts, source, content))
                 written += 1

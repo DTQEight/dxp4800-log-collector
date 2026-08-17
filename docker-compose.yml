@@ -16,11 +16,13 @@ services:
       - WEB_PASSWORD=ChangeMe123!
       # 日志保留天数，超过会自动清理
       - LOG_RETENTION_DAYS=30
-      # 每隔多少秒扫描一次容器并拉取增量日志（默认10s，开了STREAM可调大）
-      - COLLECT_INTERVAL_SEC=10
-      # 实时日志流（默认开），日志产生即入库/触发通知；家用NAS建议开
-      # 关闭则纯靠 COLLECT_INTERVAL_SEC 轮询，CPU更省但延迟更大
-      - STREAM_ENABLED=true
+      # 每隔多少秒扫描一次容器并拉取增量日志（默认30s，CPU友好）
+      # 想要更实时可以调到 10s，但 CPU 会上升
+      - COLLECT_INTERVAL_SEC=30
+      # 实时日志流（默认关），开 true 后日志产生即入库/触发通知
+      # 但每个容器多一条常驻线程，日志刷得快的容器（go2rtc/数据库等）CPU会明显上升
+      # 家用 NAS 推荐 false（默认）；CPU 富余且需要秒级通知再开 true
+      - STREAM_ENABLED=false
       # 不需要收集日志的容器名（逗号分隔），默认排除自身
       # - EXCLUDE_CONTAINERS=dxp4800-log-collector
 
