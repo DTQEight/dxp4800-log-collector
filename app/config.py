@@ -56,12 +56,22 @@ class Config:
     LOG_STORAGE_PATH = os.getenv("LOG_STORAGE_PATH", "/app/logs")
     LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "30"))
 
-    # 收集器配置（低占用默认值）
-    COLLECT_INTERVAL_SEC = int(os.getenv("COLLECT_INTERVAL_SEC", "120"))
+    # 收集器配置（默认"前端观感上秒级更新"的档位，家用可放心）
+    # 每隔多久去 Docker daemon 拉一次"每个容器的增量日志"
+    COLLECT_INTERVAL_SEC = int(os.getenv("COLLECT_INTERVAL_SEC", "60"))
+
+    # 【默认关闭】每个容器一条独立的实时日志流线程
     STREAM_ENABLED = _bool("STREAM_ENABLED", False)
+
+    # 单次从 docker logs 拉取的最大条数（防一次拉几百MB把NAS拉爆）
     MAX_LOG_LINES_PER_TICK = int(os.getenv("MAX_LOG_LINES_PER_TICK", "5000"))
-    BATCH_FLUSH_SEC = float(os.getenv("BATCH_FLUSH_SEC", "10.0"))
-    BATCH_MAX_ENTRIES = int(os.getenv("BATCH_MAX_ENTRIES", "500"))
+
+    # 批量落盘 / 批量入库缓冲
+    # - 日志停了最多 BATCH_FLUSH_SEC 秒后磁盘文件/DB里一定能看到
+    # - 日志量大会更快触发 BATCH_MAX_ENTRIES
+    # - 想要"更实时"（比如几秒钟内文件里就出现）可以把 BATCH_FLUSH_SEC 设 2-3
+    BATCH_FLUSH_SEC = float(os.getenv("BATCH_FLUSH_SEC", "3.0"))
+    BATCH_MAX_ENTRIES = int(os.getenv("BATCH_MAX_ENTRIES", "200"))
 
     EXCLUDE_CONTAINERS = [
         c.strip()

@@ -44,24 +44,38 @@ class LogCollector:
     # ---------------- 主循环 ----------------
     def run_foreground(self):
         logger.info(
-            "日志收集器启动（低占用模式）："
-            "COLLECT_INTERVAL=%ss, STREAM=%s, MAX_LINES_PER_TICK=%s, BATCH_FLUSH=%ss/%s行",
+            "日志收集器启动：COLLECT_INTERVAL=%ss, STREAM=%s, "
+            "MAX_LINES_PER_TICK=%s, BATCH_FLUSH=%ss/%s行",
             Config.COLLECT_INTERVAL_SEC, Config.STREAM_ENABLED,
             Config.MAX_LOG_LINES_PER_TICK, Config.BATCH_FLUSH_SEC, Config.BATCH_MAX_ENTRIES,
         )
         self._flush_thread = threading.Thread(target=self._flush_loop, name="log-flush", daemon=True)
         self._flush_thread.start()
 
+        # 公开一个"立即flush"开关：前端/用户点手动触发时可以让磁盘立刻写入，
+        # 解决"看起来一分钟才更新一次"的观感问题。
+        self._poke_flush_event = threading.Event()
+
         try:
             while not self._stop_event.is_set():
+                t0 = time.monotonic()
                 self._collect_once()
+                # 拉完一轮立刻尝试 flush（让前端轮询能最快拿到）
+                self._poke_flush_event.set()
                 self._cleanup_stream_threads()
-                self._stop_event.wait(max(1, Config.COLLECT_INTERVAL_SEC))
+                # 等待下一轮：支持中途被 poke_flush 打断（没用到）
+                elapsed = time.monotonic() - t0
+                wait_s = max(0.5, Config.COLLECT_INTERVAL_SEC - elapsed)
+                self._stop_event.wait(wait_s)
         finally:
-            # 退出前最后 flush 一次兜底
             try: self._flush(force=True)
             except Exception as e: logger.warning(f"最后flush出错: {e}")
             logger.info("日志收集器退出")
+
+    def request_immediate_flush(self):
+        """外部（如 Web API）可调用：下一个 flush_loop tick 立刻刷盘刷库"""
+        self._poke_flush_event.set()
+        self._collect_once_weak = getattr(self, '_collect_once_weak', None)  # noqa
 
     def stop(self):
         self._stop_event.set()
@@ -178,20 +192,27 @@ class LogCollector:
     # ---------------- flush 线程（核心：每 N 秒 / 超过条数 批量落盘） ----------------
     def _flush_loop(self):
         while not self._stop_event.is_set():
-            # 计算睡眠：满足 BATCH_FLUSH_SEC 或 BATCH_MAX_ENTRIES 任一条件就 flush
-            slept = 0
-            tick_sec = 0.5
+            tick_sec = 0.3
+            slept = 0.0
+            triggered = False
             while not self._stop_event.is_set():
                 with self._buf_lock:
                     pending = len(self._db_rows)
                 elapsed = time.monotonic() - self._last_flush_ts
+                # 三种触发条件任一命中：到时间 / 条数满 / 外部 poke（request_immediate_flush）
                 if elapsed >= Config.BATCH_FLUSH_SEC or pending >= Config.BATCH_MAX_ENTRIES:
+                    triggered = True; break
+                if self._poke_flush_event.is_set():
+                    # 外部 poke：等 0.5s 再刷，防止用户每 0.1s 点一下就刷一次
+                    self._poke_flush_event.clear()
+                    triggered = True
+                    time.sleep(0.5)
                     break
                 time.sleep(tick_sec)
                 slept += tick_sec
-                if slept > Config.BATCH_FLUSH_SEC:
-                    break
-            self._flush(force=False)
+                if slept > Config.BATCH_FLUSH_SEC + 5:
+                    triggered = True; break
+            self._flush(force=not triggered)
 
     def _flush(self, force: bool):
         # 拿锁，瞬间把缓冲区 swap 到局部变量，不阻塞收集线程太久

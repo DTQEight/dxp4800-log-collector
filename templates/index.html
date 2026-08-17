@@ -200,6 +200,7 @@
                     <button class="icon-btn auto-btn" data-sec="-1"   onclick="setAuto(-1)" title="真正实时（长连接 SSE，需后端 STREAM_ENABLED=true）">实时</button>
                     <span class="font-size-tag" id="auto-tag" style="background:#e2e8f0;border-radius:6px;padding:2px 4px;">默认 10s</span>
                 </div>
+                <button class="icon-btn" id="btn-force-sync" onclick="forceSyncNow()" title="立刻调用 docker daemon 拉最新日志并强制刷盘（解决"看起来一分钟才更新"的兜底）">⚡ 立即同步</button>
                 <button class="icon-btn" onclick="wrapToggle('log-view')">↩ 换行</button>
                 <button class="icon-btn" onclick="zoomFont(-1)">A-</button>
                 <span class="font-size-tag" id="font-size-tag">13.5</span>
@@ -241,6 +242,7 @@ let autoTimer = 0;
 let autoBytesOffset = null;   // 上次读到的文件字节长度，用于 from_bytes 增量
 let autoSse = null;          // EventSource 实例（实时模式下）
 let autoBusy = false;        // 上一次轮询还没回来，下一次跳过，防堆积
+let _liveTailCache = new Map(); // {cid:[{ts,content}…]} 保存最后 N 条，避免重复拼到文本末尾
 
 /* -------- 内存缓存：避免来回切换重复 HTTP -------- */
 const fileTextCache = new Map();   // key = "name|filename|tail" -> Promise<string>
@@ -434,31 +436,79 @@ async function autoTickPoll(){
     if(autoBusy || !currentFile || !currentName) return;
     autoBusy = true;
     try {
-        const qs = new URLSearchParams();
+        // Step 1: 先按 from_bytes 追磁盘文件（低成本）
+        let qs = new URLSearchParams();
         if(autoBytesOffset != null) qs.set('from_bytes', String(autoBytesOffset));
         else qs.set('tail', String(currentTail || 20));
-        const r = await fetch(`/api/containers/${encodeURIComponent(currentName)}/files/${encodeURIComponent(currentFile)}?${qs.toString()}`);
+        let r = await fetch(`/api/containers/${encodeURIComponent(currentName)}/files/${encodeURIComponent(currentFile)}?${qs.toString()}`);
         if(r.status === 404){
-            // 日期翻到新一天：刷新文件列表并自动切到新一天（如果有）
             if (currentTab==='file') await loadFiles();
-            return;
+            autoBusy=false; return;
         }
-        const delta = await r.text();
-        const bytes = r.headers.get('X-Content-Bytes');
+        let delta = await r.text();
+        let bytes = r.headers.get('X-Content-Bytes');
         if(bytes) autoBytesOffset = Number(bytes);
-        if(delta){
-            // 只追加到末尾（小批量追加比整份重绘省 N 倍 CPU）
-            const ta = $('log-view');
-            const atBottom = (ta.scrollHeight - ta.scrollTop - ta.clientHeight) < 60;
-            if(ta.value && !ta.value.endsWith('\n')) ta.value += '\n';
-            ta.value += (ta.value && !delta.startsWith('\n') ? '\n' : '') + delta;
-            if(atBottom) ta.scrollTop = ta.scrollHeight;
+        if(delta) appendTextarea('log-view', delta);
+
+        // Step 2: 如果这一轮磁盘文件没变化（比如文件还没到BATCH_FLUSH_SEC），
+        //         立刻 fallback：直接从 docker daemon 拉最新 N 行，给用户"已经更新了"的观感
+        //         （这一步就是你要的"不会一分钟才更新"的关键）
+        if(!delta){
+            const n = Math.max(50, currentTail || 20);
+            const tailKey = `${currentCid}::${n}`;
+            let seen = _liveTailCache.get(tailKey);
+            if(!seen){ seen = new Map(); _liveTailCache.set(tailKey, seen); }
+
+            const tr = await fetch(`/api/containers/${encodeURIComponent(currentCid||currentName)}/tail?n=${n}`);
+            if(tr.ok){
+                const text = await tr.text();
+                const lines = text.split('\n');
+                const fresh = [];
+                for (const l of lines){
+                    if(!l) continue;
+                    const k = hashLine(l);
+                    if(!seen.has(k)) fresh.push(l);
+                    seen.set(k, Date.now());
+                }
+                // 防 seen 无限大：只保留最近 20000 条
+                if(seen.size > 20000){
+                    let i=0; const cutoff=seen.size-15000;
+                    for(const k of seen.keys()){ if(++i<cutoff) seen.delete(k); else break; }
+                }
+                if(fresh.length) appendTextarea('log-view', fresh.join('\n'));
+            }
         }
     } catch(e){
         console.debug('auto tick err',e);
     } finally {
         autoBusy = false;
     }
+}
+function appendTextarea(id, delta){
+    if(!delta) return;
+    const ta = $(id);
+    const atBottom = (ta.scrollHeight - ta.scrollTop - ta.clientHeight) < 60;
+    if(ta.value && !ta.value.endsWith('\n')) ta.value += '\n';
+    // 避免和上一行重复拼接空串
+    const needLeading = ta.value && !(delta.startsWith('\n') || ta.value.endsWith('\n'));
+    ta.value += (needLeading ? '\n' : '') + delta;
+    if(atBottom) ta.scrollTop = ta.scrollHeight;
+}
+function hashLine(s){
+    // 简单字符串hash（31位），足够去重 live tail 的最近行
+    let h = 2166136261;
+    for(let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return h.toString(36);
+}
+/* 强制立即同步：点一下 = 立刻让后端 collect 一轮 + 刷盘 + 本前端再拉一次 */
+async function forceSyncNow(){
+    try{
+        await fetch('/api/collect_now', {method:'POST'});
+    }catch(_){}
+    // 立刻跑 2 次 tick（间隔 400ms），先拿到 daemon 最新 tail，再等刷盘后读文件
+    autoTickPoll();
+    setTimeout(autoTickPoll, 400);
+    setTimeout(autoTickPoll, 1500);
 }
 /* 实时模式（SSE 长连接）：需要后端 STREAM_ENABLED=true，才用 /tail?stream=1 */
 function startAutoSSE(){

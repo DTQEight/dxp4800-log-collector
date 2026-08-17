@@ -46,6 +46,11 @@ def main():
     scheduler.start()
 
     app = create_app()
+    # 把 collector 实例注入到 Flask 里，API /collect_now 能立刻触发拉取+刷盘
+    try:
+        app.config.get("SET_COLLECTOR_HOOK", lambda c: None)(collector)
+    except Exception as e:
+        logging.warning(f"inject collector hook failed: {e}")
 
     stop_reason = {"flag": False}
 

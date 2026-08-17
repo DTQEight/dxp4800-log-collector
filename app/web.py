@@ -3,6 +3,7 @@ import csv
 import json
 import os
 import time
+import threading
 import logging
 from functools import wraps
 from flask import (
@@ -33,6 +34,15 @@ def create_app() -> Flask:
                 return redirect(url_for("login"))
             return f(*args, **kwargs)
         return wrapper
+
+    # ---------- 收集器句柄（Web API 能 request_immediate_flush / request_immediate_collect） ----------
+    # 由 app/main.py 启动时把 collector 实例通过 set_collector_hook 注入进来
+    _collector_ref = []
+
+    def set_collector_hook(c):
+        _collector_ref[:] = [c]
+        app._collector_weakref_hook = c
+    app.config["SET_COLLECTOR_HOOK"] = set_collector_hook
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -170,8 +180,7 @@ def create_app() -> Flask:
         }
         return Response(content, mimetype="text/plain; charset=utf-8", headers=headers)
 
-    # ---------- API: 简单轮询版的"追加最新行"（纯文本接口，前端兼容老版本）----------
-    # 同时支持 stream=true 走 SSE（当后端 STREAM_ENABLED 也开启时，浏览器端不做轮询，直接长连接省 CPU）
+    # ---------- API: 实时日志 tail ----------
     @app.route("/api/containers/<cid_or_name>/tail")
     @login_required
     def api_tail(cid_or_name):
@@ -181,7 +190,13 @@ def create_app() -> Flask:
         if use_sse and Config.STREAM_ENABLED:
             return _tail_sse(cid_or_name, n)
         text = DockerClient().get_container_logs(cid_or_name, tail=n) or ""
-        return Response(text, mimetype="text/plain; charset=utf-8")
+        # /tail 的响应也顺手返回 X-Collect-Now，让前端知道"我刚刚触发了收集"
+        headers = {}
+        try:
+            app._collector_weakref_hook and app._collector_weakref_hook.request_immediate_flush()
+        except Exception:
+            pass
+        return Response(text, mimetype="text/plain; charset=utf-8", headers=headers)
 
     def _tail_sse(cid_or_name: str, n: int) -> Response:
         """真实 SSE tail -f：有新日志就推事件，不推则 15s 心跳。省轮询开销。"""
@@ -222,5 +237,21 @@ def create_app() -> Flask:
             mimetype="text/event-stream",
             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
         )
+
+    # ---------- API: 强制触发一次"全量增量拉取 + 立即刷盘"（解决"前端看一分钟才更新"的终极兜底） ----------
+    @app.route("/api/collect_now", methods=["POST"])
+    @login_required
+    def api_collect_now():
+        ok = False
+        c = _collector_ref[0] if _collector_ref else None
+        if c is not None:
+            try:
+                c._poke_flush_event.set()
+                # 后台线程立刻独立跑一轮 _collect_once，不阻塞这个 HTTP
+                threading.Thread(target=c._collect_once, daemon=True, name="collect-now").start()
+                ok = True
+            except Exception as e:
+                logger.error(f"collect_now 触发失败: {e}")
+        return jsonify({"ok": ok})
 
     return app
