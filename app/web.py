@@ -26,11 +26,24 @@ def create_app() -> Flask:
     )
     app.secret_key = "dxp4800-log-secret-key"
 
+    # ---------- 全局异常处理器：/api/* 路径永远返回 JSON，不返回 Flask 默认 HTML 500 页 ----------
+    @app.errorhandler(Exception)
+    def _global_exception_handler(e):
+        # /api/ 前缀的请求一律 JSON 响应，避免前端把 HTML 错误页当 JSON 解析出 Unexpected token '<'
+        if request.path.startswith("/api/"):
+            logger.exception("API 未处理异常: path=%s", request.path)
+            return jsonify({"error": str(e)}), 500
+        # 页面路径走默认错误页
+        raise e
+
     # ---------- 登录鉴权 ----------
     def login_required(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
             if not session.get("logged_in"):
+                # API 请求未登录返回 JSON 401，页面请求 302 到登录页
+                if request.path.startswith("/api/"):
+                    return jsonify({"error": "未登录或会话过期"}), 401
                 return redirect(url_for("login"))
             return f(*args, **kwargs)
         return wrapper
@@ -203,7 +216,11 @@ def create_app() -> Flask:
         lines = dc.tail_runtime(cid, n=n)
         text = "\n".join(lines)
         try:
-            app._collector_weakref_hook and app._collector_weakref_hook.request_immediate_flush()
+            hook = getattr(app, "_collector_weakref_hook", None)
+            if hook is not None:
+                flush_fn = getattr(hook, "request_immediate_flush", None)
+                if flush_fn is not None:
+                    flush_fn()
         except Exception:
             pass
         return Response(text, mimetype="text/plain; charset=utf-8")
@@ -213,16 +230,23 @@ def create_app() -> Flask:
     @login_required
     def api_collect_now():
         ok = False
+        msg = ""
         c = _collector_ref[0] if _collector_ref else None
-        if c is not None:
+        if c is None:
+            msg = "收集器实例尚未注入（启动中？）"
+        else:
             try:
-                c._poke_flush_event.set()
-                # 后台线程立刻独立跑一轮 _collect_once，不阻塞这个 HTTP
-                threading.Thread(target=c._collect_once, daemon=True, name="collect-now").start()
+                poke = getattr(c, "_poke_flush_event", None)
+                if poke is not None:
+                    poke.set()
+                collect_fn = getattr(c, "_collect_once", None)
+                if collect_fn is not None:
+                    threading.Thread(target=collect_fn, daemon=True, name="collect-now").start()
                 ok = True
             except Exception as e:
                 logger.error(f"collect_now 触发失败: {e}")
-        return jsonify({"ok": ok})
+                msg = str(e)
+        return jsonify({"ok": ok, "msg": msg})
 
     # ---------- API: 企业微信通知测试 ----------
     @app.route("/api/wechat/test", methods=["POST"])

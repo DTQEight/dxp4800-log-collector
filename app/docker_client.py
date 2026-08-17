@@ -68,8 +68,13 @@ class DockerClient:
                     "memory_limit": 0,
                     "exclude": False,
                 })
-        # 应用排除列表（Config.EXCLUDE_CONTAINERS: 逗号分隔的容器名）
-        excludes = set(n.strip() for n in (Config.EXCLUDE_CONTAINERS or "").split(",") if n.strip())
+        # 应用排除列表（Config.EXCLUDE_CONTAINERS: list[str]）
+        excludes = set()
+        raw = Config.EXCLUDE_CONTAINERS or []
+        if isinstance(raw, str):
+            excludes.update(n.strip() for n in raw.split(",") if n.strip())
+        else:
+            excludes.update(n.strip() for n in raw if isinstance(n, str) and n.strip())
         for item in out:
             item["exclude"] = item["name"] in excludes
         return out

@@ -143,8 +143,26 @@ def insert_log_entries(rows):
 def list_containers():
     with _db_lock:
         conn = _get_conn()
-        cur = conn.execute("SELECT * FROM containers ORDER BY last_seen DESC")
-        return [dict(r) for r in cur.fetchall()]
+        try:
+            cur = conn.execute("SELECT * FROM containers ORDER BY last_seen DESC")
+            return [dict(r) for r in cur.fetchall()]
+        except Exception as e:
+            # 表不存在或损坏：尝试自动修复建表
+            logger.warning(f"list_containers 失败: {e}，尝试重建表")
+            try:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS containers (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        image TEXT,
+                        first_seen TIMESTAMP,
+                        last_seen TIMESTAMP
+                    )
+                """)
+                return []
+            except Exception as e2:
+                logger.error(f"重建表也失败: {e2}")
+                return []
 
 
 def search_logs(container_id=None, container_name=None, keyword=None,
