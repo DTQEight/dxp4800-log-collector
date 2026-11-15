@@ -285,6 +285,64 @@ def create_app() -> Flask:
                 msg = str(e)
         return jsonify({"ok": ok, "msg": msg})
 
+    # ---------- API: 企业微信接收消息回调（公开接口，企业微信服务器调用，不能要求登录）----------
+    @app.route("/api/wechat/callback", methods=["GET", "POST"])
+    def api_wechat_callback():
+        from app.wechat_crypt import (
+            WeChatCryptError, decrypt, extract_encrypt, verify_signature,
+        )
+        token = Config.WECHAT_WORK_CALLBACK_TOKEN
+        aeskey = Config.WECHAT_WORK_CALLBACK_AESKEY
+        if not token:
+            return Response("callback token not configured", status=400, mimetype="text/plain")
+
+        timestamp = request.args.get("timestamp", "")
+        nonce = request.args.get("nonce", "")
+        msg_signature = request.args.get("msg_signature", "")
+        plain_signature = request.args.get("signature", "")
+
+        if request.method == "GET":
+            echostr = request.args.get("echostr", "")
+            if not echostr:
+                return Response("missing echostr", status=400, mimetype="text/plain")
+            try:
+                if msg_signature:
+                    if not verify_signature(token, timestamp, nonce, echostr, msg_signature):
+                        return Response("invalid signature", status=400, mimetype="text/plain")
+                    if not aeskey:
+                        return Response("AESKey not configured", status=400, mimetype="text/plain")
+                    return Response(decrypt(echostr, aeskey), mimetype="text/plain")
+                if not verify_signature(token, timestamp, nonce, "", plain_signature):
+                    return Response("invalid signature", status=400, mimetype="text/plain")
+                return Response(echostr, mimetype="text/plain")
+            except WeChatCryptError as e:
+                logger.warning(f"企业微信回调 URL 校验失败: {e}")
+                return Response(f"verify failed: {e}", status=400, mimetype="text/plain")
+
+        # POST：接收消息/事件
+        body = request.get_data(as_text=True) or ""
+        encrypt = extract_encrypt(body)
+        try:
+            if msg_signature:
+                if not encrypt:
+                    return Response("missing Encrypt", status=400, mimetype="text/plain")
+                if not verify_signature(token, timestamp, nonce, encrypt, msg_signature):
+                    return Response("invalid signature", status=400, mimetype="text/plain")
+                if not aeskey:
+                    return Response("AESKey not configured", status=400, mimetype="text/plain")
+                plain = decrypt(encrypt, aeskey)
+            else:
+                if not verify_signature(token, timestamp, nonce, "", plain_signature):
+                    return Response("invalid signature", status=400, mimetype="text/plain")
+                plain = body
+        except WeChatCryptError as e:
+            logger.warning(f"企业微信回调消息解密失败: {e}")
+            return Response(f"decrypt failed: {e}", status=400, mimetype="text/plain")
+
+        logger.info(f"收到企业微信回调消息: {plain[:500]}")
+        # 企业微信要求 5 秒内返回 success，否则会重试
+        return Response("success", mimetype="text/plain")
+
     # ---------- API: 企业微信通知测试 ----------
     @app.route("/api/wechat/test", methods=["POST"])
     @login_required
@@ -328,6 +386,9 @@ def create_app() -> Flask:
             "cooldown_sec": Config.WECHAT_WORK_COOLDOWN_SEC,
             "include_containers": Config.WECHAT_WORK_INCLUDE_CONTAINERS,
             "proxy_configured": bool(Config.WECHAT_WORK_PROXY_URL),
+            "callback_url": Config.WECHAT_WORK_CALLBACK_URL,
+            "callback_token_configured": bool(Config.WECHAT_WORK_CALLBACK_TOKEN),
+            "callback_aeskey_configured": bool(Config.WECHAT_WORK_CALLBACK_AESKEY),
         })
 
     # ---------- API: 数据库日志检索 + 导出 ----------

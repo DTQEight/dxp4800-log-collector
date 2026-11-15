@@ -277,6 +277,11 @@
             flex:1; min-width:160px; padding:7px 10px; font-size:13px;
             border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#0f172a;
         }
+        .settings-form .field .field-row button {
+            flex:0 0 auto; padding:6px 10px; font-size:12px; cursor:pointer;
+            border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#334155;
+        }
+        .settings-form .field .field-row button:hover { border-color:#94a3b8; }
     </style>
 </head>
 <body>
@@ -452,6 +457,28 @@
                     </label>
                     <span class="unit">历史错误也通知</span>
                 </div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-callback-url">回调地址</label>
+                    <input type="text" id="wc-callback-url" placeholder="https://你的域名/api/wechat/callback" autocomplete="off">
+                    <button type="button" onclick="fillCallbackUrl()">用当前地址</button>
+                </div>
+                <div class="desc">企业微信后台「应用 → 接收消息 → 设置API接收」中填这个地址，需公网可访问</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-callback-token">回调 Token</label>
+                    <input type="password" id="wc-callback-token" placeholder="未设置" autocomplete="new-password">
+                </div>
+                <div class="desc">后台随机生成的令牌（3-32 位字母/数字），留空表示不修改</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-callback-aeskey">EncodingAESKey</label>
+                    <input type="password" id="wc-callback-aeskey" placeholder="未设置" autocomplete="new-password">
+                </div>
+                <div class="desc">后台生成的 43 位字符串，留空表示不修改；保存后到企业微信后台点「保存」完成回调校验</div>
             </div>
             <div class="result" id="wechat-result"></div>
             <div class="actions">
@@ -1021,7 +1048,15 @@ const WECHAT_FIELDS = [
     {key:'WECHAT_WORK_INCLUDE_CONTAINERS', el:'wc-include',     type:'list'},
     {key:'WECHAT_WORK_PROXY_URL',          el:'wc-proxy',       type:'text'},
     {key:'WECHAT_WORK_NOTIFY_ON_INIT',     el:'wc-notify-init', type:'bool'},
+    {key:'WECHAT_WORK_CALLBACK_URL',       el:'wc-callback-url',    type:'text'},
+    {key:'WECHAT_WORK_CALLBACK_TOKEN',     el:'wc-callback-token',  type:'secret'},
+    {key:'WECHAT_WORK_CALLBACK_AESKEY',    el:'wc-callback-aeskey', type:'secret'},
 ];
+
+function fillCallbackUrl(){
+    const el = $('wc-callback-url');
+    if(el && !el.value) el.value = location.origin + '/api/wechat/callback';
+}
 
 function updateWechatEnabledText(){
     const el = $('wc-enabled');
@@ -1066,12 +1101,14 @@ function renderWechatStatus(s){
         ? (cfgOk ? '已启用 ✓' : '已启用，但配置不完整（缺 ' + missing.join(', ') + '）')
         : (cfgOk ? '未启用（配置已完整，可随时开启）' : '未启用');
     const includes = (s.include_containers || []).join(', ') || '全部容器';
+    const cbOk = s.callback_token_configured && s.callback_aeskey_configured;
 
     grid.innerHTML = `
         <div class="k">运行状态</div> <div class="v ${enabledCls}">${enabledText}</div>
         <div class="k">凭据</div>     <div class="v ${cfgOk?'ok':'bad'}">${cfgOk?'CorpID / CorpSecret / AgentID 已就绪 ✓':'缺 ' + missing.join(', ') + ' ✗'}</div>
         <div class="k">接收人</div>   <div class="v">${s.to_user||'@all'}</div>
         <div class="k">监控范围</div> <div class="v">${includes}</div>
+        <div class="k">消息回调</div> <div class="v ${cbOk?'ok':''}">${cbOk?'Token / EncodingAESKey 已配置 ✓':'未配置（可选）'}</div>
     `;
 
     if(!cfgOk){

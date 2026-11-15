@@ -128,6 +128,15 @@ class Config:
     #   false = 只报"本次启动之后新产生"的错误（默认，符合直觉）
     WECHAT_WORK_NOTIFY_ON_INIT = _bool("WECHAT_WORK_NOTIFY_ON_INIT", False)
 
+    # ===== 企业微信接收消息（回调）=====
+    # 在企业微信后台「应用 → 接收消息 → 设置API接收」中配置
+    # 回调地址：本服务的公开地址 + /api/wechat/callback
+    WECHAT_WORK_CALLBACK_URL = os.getenv("WECHAT_WORK_CALLBACK_URL", "")
+    # Token：后台随机生成的令牌（3-32 位字母/数字）
+    WECHAT_WORK_CALLBACK_TOKEN = os.getenv("WECHAT_WORK_CALLBACK_TOKEN", "")
+    # EncodingAESKey：后台生成的 43 位字符串
+    WECHAT_WORK_CALLBACK_AESKEY = os.getenv("WECHAT_WORK_CALLBACK_AESKEY", "")
+
 
 # ===== 运行时配置持久化（UI 修改的参数存 JSON，重启后保留）=====
 # 持久化 UI 可调的参数（含企业微信模块）
@@ -201,6 +210,10 @@ UI_ADJUSTABLE = {
     "WECHAT_WORK_MAX_CONTENT_LEN":    int,
     "WECHAT_WORK_INCLUDE_CONTAINERS": str,
     "WECHAT_WORK_NOTIFY_ON_INIT":     bool,
+    # ===== 企业微信接收消息（回调）=====
+    "WECHAT_WORK_CALLBACK_URL":       str,
+    "WECHAT_WORK_CALLBACK_TOKEN":     str,
+    "WECHAT_WORK_CALLBACK_AESKEY":    str,
 }
 
 
@@ -258,6 +271,24 @@ def save_runtime_config(updates: dict) -> dict:
                 if not secret:
                     continue
                 setattr(Config, key, secret)
+            elif key == "WECHAT_WORK_CALLBACK_TOKEN":
+                # 留空表示不修改
+                token = str(val or "").strip()
+                if not token:
+                    continue
+                if not (3 <= len(token) <= 32):
+                    rejected.append(key)
+                    continue
+                setattr(Config, key, token)
+            elif key == "WECHAT_WORK_CALLBACK_AESKEY":
+                # 留空表示不修改
+                aeskey = str(val or "").strip()
+                if not aeskey:
+                    continue
+                if len(aeskey) != 43:
+                    rejected.append(key)
+                    continue
+                setattr(Config, key, aeskey)
             elif key in _LIST_KEYS:
                 setattr(Config, key, _to_list(val))
             elif key in _BOOL_KEYS:
@@ -322,6 +353,12 @@ def get_ui_config() -> dict:
         "WECHAT_WORK_MAX_CONTENT_LEN":    Config.WECHAT_WORK_MAX_CONTENT_LEN,
         "WECHAT_WORK_INCLUDE_CONTAINERS": ",".join(Config.WECHAT_WORK_INCLUDE_CONTAINERS),
         "WECHAT_WORK_NOTIFY_ON_INIT":     Config.WECHAT_WORK_NOTIFY_ON_INIT,
+        # ===== 企业微信接收消息（回调）=====
+        "WECHAT_WORK_CALLBACK_URL":       Config.WECHAT_WORK_CALLBACK_URL,
+        "WECHAT_WORK_CALLBACK_TOKEN":     "",
+        "WECHAT_WORK_CALLBACK_TOKEN_SET": bool(Config.WECHAT_WORK_CALLBACK_TOKEN),
+        "WECHAT_WORK_CALLBACK_AESKEY":    "",
+        "WECHAT_WORK_CALLBACK_AESKEY_SET": bool(Config.WECHAT_WORK_CALLBACK_AESKEY),
     }
 
 
