@@ -273,6 +273,10 @@
             background:#2563eb; color:#fff; border-color:#2563eb;
         }
         .settings-form .actions button:disabled { opacity:.55; cursor:not-allowed; }
+        .settings-form .actions input {
+            flex:1; min-width:160px; padding:7px 10px; font-size:13px;
+            border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#0f172a;
+        }
     </style>
 </head>
 <body>
@@ -355,9 +359,9 @@
     </div>
 </main>
 
-<!-- ===== 企业微信测试 / 状态弹窗 ===== -->
+<!-- ===== 企业微信配置 / 测试弹窗 ===== -->
 <div class="modal-mask" id="wechat-modal" onclick="if(event.target===this)closeWechatModal()">
-    <div class="modal">
+    <div class="modal settings-modal">
         <h3>
             <span>💬 企业微信通知</span>
             <span class="close" onclick="closeWechatModal()">×</span>
@@ -365,11 +369,97 @@
         <div class="status-grid" id="wechat-status-grid">
             <div class="k">加载中…</div><div class="v"></div>
         </div>
-        <div class="actions">
-            <input id="wechat-test-msg" placeholder="自定义测试消息（留空发默认测试消息）">
-            <button class="primary" id="wechat-test-btn" onclick="sendWechatTest()">📤 发送测试</button>
+        <div class="settings-form">
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-enabled">启用通知</label>
+                    <label class="toggle">
+                        <input type="checkbox" id="wc-enabled" onchange="updateWechatEnabledText()">
+                        <span class="slider"></span>
+                    </label>
+                    <span class="unit" id="wc-enabled-text">关闭</span>
+                </div>
+                <div class="desc">开启后，命中错误关键字的新日志会推送到企业微信</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-corpid">CorpID</label>
+                    <input type="text" id="wc-corpid" placeholder="企业微信 → 企业信息 → 企业ID" autocomplete="off">
+                </div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-corpsecret">CorpSecret</label>
+                    <input type="password" id="wc-corpsecret" placeholder="自建应用 → Secret" autocomplete="new-password">
+                </div>
+                <div class="desc">留空表示不修改已保存的 Secret</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-agentid">AgentID</label>
+                    <input type="number" id="wc-agentid" min="0" step="1" placeholder="自建应用 → AgentId">
+                </div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-touser">接收人</label>
+                    <input type="text" id="wc-touser" placeholder="@all 或 user1|user2" autocomplete="off">
+                </div>
+                <div class="desc">@all 表示应用可见范围内全员，多个用户用 | 分隔</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-keywords">错误关键字</label>
+                    <input type="text" id="wc-keywords" placeholder="ERROR,FATAL,Exception" autocomplete="off">
+                </div>
+                <div class="desc">逗号分隔，日志命中任一关键字即触发通知</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-cooldown">单容器冷却</label>
+                    <input type="number" id="wc-cooldown" min="1" max="3600" step="1">
+                    <span class="unit">秒</span>
+                </div>
+                <div class="desc">同一容器在该时间窗口内只推一条通知</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-maxlen">正文最大长度</label>
+                    <input type="number" id="wc-maxlen" min="50" max="1500" step="1">
+                    <span class="unit">字符</span>
+                </div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-include">监控容器</label>
+                    <input type="text" id="wc-include" placeholder="留空=全部容器，如 go2rtc,frpc" autocomplete="off">
+                </div>
+                <div class="desc">逗号分隔，留空表示监控全部容器</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-proxy">HTTP 代理</label>
+                    <input type="text" id="wc-proxy" placeholder="可选，如 http://192.168.31.1:7890" autocomplete="off">
+                </div>
+                <div class="desc">NAS 无法直连公网时填写，留空表示直连</div>
+            </div>
+            <div class="field">
+                <div class="field-row">
+                    <label class="field-label" for="wc-notify-init">首次启动补发</label>
+                    <label class="toggle">
+                        <input type="checkbox" id="wc-notify-init">
+                        <span class="slider"></span>
+                    </label>
+                    <span class="unit">历史错误也通知</span>
+                </div>
+            </div>
+            <div class="result" id="wechat-result"></div>
+            <div class="actions">
+                <input id="wechat-test-msg" placeholder="自定义测试消息（留空发默认测试消息）">
+                <button id="wechat-test-btn" onclick="sendWechatTest()">📤 发送测试</button>
+                <button class="primary" id="wechat-save-btn" onclick="saveWechatConfig()">保存配置</button>
+            </div>
         </div>
-        <div class="result" id="wechat-result"></div>
         <div class="hint" id="wechat-hint"></div>
     </div>
 </div>
@@ -918,7 +1008,26 @@ function scrollToBottom(){
     ta.scrollTop = ta.scrollHeight;
 }
 
-/* ================ 企业微信通知：状态 + 测试 ================ */
+/* ================ 企业微信通知：配置 + 状态 + 测试 ================ */
+const WECHAT_FIELDS = [
+    {key:'WECHAT_WORK_ENABLED',            el:'wc-enabled',     type:'bool'},
+    {key:'WECHAT_WORK_CORPID',             el:'wc-corpid',      type:'text'},
+    {key:'WECHAT_WORK_CORPSECRET',         el:'wc-corpsecret',  type:'secret'},
+    {key:'WECHAT_WORK_AGENTID',            el:'wc-agentid',     type:'number'},
+    {key:'WECHAT_WORK_TOUSER',             el:'wc-touser',      type:'text'},
+    {key:'WECHAT_WORK_ERROR_KEYWORDS',     el:'wc-keywords',    type:'list'},
+    {key:'WECHAT_WORK_COOLDOWN_SEC',       el:'wc-cooldown',    type:'number'},
+    {key:'WECHAT_WORK_MAX_CONTENT_LEN',    el:'wc-maxlen',      type:'number'},
+    {key:'WECHAT_WORK_INCLUDE_CONTAINERS', el:'wc-include',     type:'list'},
+    {key:'WECHAT_WORK_PROXY_URL',          el:'wc-proxy',       type:'text'},
+    {key:'WECHAT_WORK_NOTIFY_ON_INIT',     el:'wc-notify-init', type:'bool'},
+];
+
+function updateWechatEnabledText(){
+    const el = $('wc-enabled');
+    if(el) $('wc-enabled-text').textContent = el.checked ? '已启用' : '关闭';
+}
+
 async function fetchWechatStatus(){
     try {
         const resp = await fetch('/api/wechat/status');
@@ -927,10 +1036,17 @@ async function fetchWechatStatus(){
     } catch(e){ return null; }
 }
 
+async function refreshWechatStatus(){
+    const s = await fetchWechatStatus();
+    renderWechatStatus(s);
+    return s;
+}
+
 function renderWechatStatus(s){
     const badge = $('wechat-badge');
     const grid = $('wechat-status-grid');
     const hint = $('wechat-hint');
+    const testBtn = $('wechat-test-btn');
     if(!s){
         badge.className = 'wechat-badge off';
         grid.innerHTML = '<div class="k">状态</div><div class="v bad">无法获取（后端未响应）</div>';
@@ -940,40 +1056,113 @@ function renderWechatStatus(s){
 
     // 配置完整度检查
     const missing = [];
-    if(!s.corpid_configured)     missing.push('CORPID');
-    if(!s.corpsecret_configured) missing.push('CORPSECRET');
-    if(!s.agentid)               missing.push('AGENTID');
+    if(!s.corpid_configured)     missing.push('CorpID');
+    if(!s.corpsecret_configured) missing.push('CorpSecret');
+    if(!s.agentid)               missing.push('AgentID');
     const cfgOk = missing.length === 0;
 
     const enabledCls = s.enabled ? (cfgOk ? 'ok' : 'warn') : 'bad';
     const enabledText = s.enabled
         ? (cfgOk ? '已启用 ✓' : '已启用，但配置不完整（缺 ' + missing.join(', ') + '）')
-        : '未启用（需在 docker-compose.yml 设 WECHAT_WORK_ENABLED=true）';
-
-    const keywords = (s.error_keywords || []).join(', ') || '（无）';
+        : (cfgOk ? '未启用（配置已完整，可随时开启）' : '未启用');
     const includes = (s.include_containers || []).join(', ') || '全部容器';
 
     grid.innerHTML = `
-        <div class="k">开关</div>          <div class="v ${enabledCls}">${enabledText}</div>
-        <div class="k">CorpID</div>        <div class="v ${s.corpid_configured?'ok':'bad'}">${s.corpid_configured?'已配置 ✓':'未配置 ✗'}</div>
-        <div class="k">CorpSecret</div>    <div class="v ${s.corpsecret_configured?'ok':'bad'}">${s.corpsecret_configured?'已配置 ✓':'未配置 ✗'}</div>
-        <div class="k">AgentID</div>       <div class="v ${s.agentid?'ok':'bad'}">${s.agentid||'未配置 ✗'}</div>
-        <div class="k">接收人</div>        <div class="v">${s.to_user||'@all'}</div>
-        <div class="k">错误关键字</div>    <div class="v">${keywords}</div>
-        <div class="k">单容器冷却</div>    <div class="v">${s.cooldown_sec||60} 秒</div>
-        <div class="k">监控范围</div>      <div class="v">${includes}</div>
-        <div class="k">HTTP 代理</div>     <div class="v ${s.proxy_configured?'ok':''}">${s.proxy_configured?'已配置 ✓':'未配置（直连）'}</div>
+        <div class="k">运行状态</div> <div class="v ${enabledCls}">${enabledText}</div>
+        <div class="k">凭据</div>     <div class="v ${cfgOk?'ok':'bad'}">${cfgOk?'CorpID / CorpSecret / AgentID 已就绪 ✓':'缺 ' + missing.join(', ') + ' ✗'}</div>
+        <div class="k">接收人</div>   <div class="v">${s.to_user||'@all'}</div>
+        <div class="k">监控范围</div> <div class="v">${includes}</div>
     `;
 
-    if(!s.enabled){
-        hint.textContent = '提示：在 docker-compose.yml 的 environment 下设 WECHAT_WORK_ENABLED=true，并填好 CORPID / CORPSECRET / AGENTID，重启容器后点这里发送测试消息。';
-        $('wechat-test-btn').disabled = true;
-    } else if(!cfgOk){
-        hint.textContent = '提示：开关已启用但凭据未配齐，请先在 docker-compose.yml 补上 ' + missing.join(', ') + '。';
-        $('wechat-test-btn').disabled = true;
+    if(!cfgOk){
+        hint.textContent = '提示：填写并保存 CorpID / CorpSecret / AgentID 后即可发送测试消息；配置保存后立即生效，无需重启容器。';
+        testBtn.disabled = true;
     } else {
         hint.textContent = '点击"发送测试"会立刻通过企业微信 API 发一条消息到接收人。如果收不到，检查：1) 企业微信后台"应用 → 企业可信IP"是否加了你 NAS 的出口 IP；2) 应用"可见范围"是否包含接收人。';
-        $('wechat-test-btn').disabled = false;
+        testBtn.disabled = false;
+    }
+}
+
+async function loadWechatConfig(){
+    const result = $('wechat-result');
+    try {
+        const resp = await fetch('/api/config');
+        if(!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        WECHAT_FIELDS.forEach(f => {
+            const el = $(f.el);
+            if(!el) return;
+            const v = data[f.key];
+            if(f.type === 'bool'){
+                el.checked = !!v;
+            } else if(f.type === 'secret'){
+                el.value = '';
+                el.placeholder = data[f.key + '_SET'] ? '已设置，留空表示不修改' : '未设置';
+            } else if(f.type === 'list'){
+                el.value = Array.isArray(v) ? v.join(',') : (v || '');
+            } else if(v !== undefined && v !== null){
+                el.value = String(v);
+            }
+        });
+        updateWechatEnabledText();
+    } catch(e){
+        result.className = 'result err';
+        result.textContent = '✗ 加载配置失败：' + e.message;
+    }
+}
+
+async function saveWechatConfig(){
+    const btn = $('wechat-save-btn');
+    const result = $('wechat-result');
+    const payload = {};
+    WECHAT_FIELDS.forEach(f => {
+        const el = $(f.el);
+        if(!el) return;
+        if(f.type === 'bool'){
+            payload[f.key] = el.checked;
+        } else if(f.type === 'number'){
+            if(el.value !== ''){
+                const n = Number(el.value);
+                if(!isNaN(n)) payload[f.key] = n;
+            }
+        } else if(f.type === 'secret'){
+            if(el.value) payload[f.key] = el.value;
+        } else if(f.type === 'list'){
+            payload[f.key] = (el.value || '').split(',').map(s => s.trim()).filter(Boolean);
+        } else {
+            payload[f.key] = (el.value || '').trim();
+        }
+    });
+
+    result.className = 'result';
+    result.textContent = '';
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = '保存中…';
+    try {
+        const resp = await fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json().catch(() => ({}));
+        if(!resp.ok) throw new Error(data.detail || data.msg || ('HTTP ' + resp.status));
+        await refreshWechatStatus();
+        await loadWechatConfig();
+        const rejected = data.rejected || [];
+        if(rejected.length){
+            result.className = 'result err';
+            result.textContent = '✗ 部分配置未保存：' + rejected.join(', ');
+        } else {
+            result.className = 'result ok';
+            result.textContent = '✓ 配置已保存并立即生效';
+        }
+    } catch(e){
+        result.className = 'result err';
+        result.textContent = '✗ 保存失败：' + e.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldText;
     }
 }
 
@@ -983,8 +1172,7 @@ async function openWechatModal(){
     $('wechat-result').textContent = '';
     $('wechat-status-grid').innerHTML = '<div class="k">加载中…</div><div class="v"></div>';
     $('wechat-test-btn').disabled = true;
-    const s = await fetchWechatStatus();
-    renderWechatStatus(s);
+    await Promise.all([loadWechatConfig(), refreshWechatStatus()]);
 }
 
 function closeWechatModal(){
@@ -1024,11 +1212,7 @@ async function sendWechatTest(){
 }
 
 // 页面加载时同步一下徽章颜色（不开弹窗也能看到开关状态）
-fetchWechatStatus().then(s => {
-    if(s){
-        $('wechat-badge').className = s.enabled ? 'wechat-badge on' : 'wechat-badge off';
-    }
-});
+refreshWechatStatus();
 
 /* ================ 设置面板：加载 / 保存配置 ================ */
 const SETTINGS_FIELDS = [

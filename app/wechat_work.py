@@ -35,6 +35,14 @@ def _build_proxies() -> dict | None:
     return {"http": url, "https": url}
 
 
+def reset_access_token_cache() -> None:
+    """清空本地 access_token 缓存（UI 修改 corpid/corpsecret 后调用）。"""
+    global _access_token, _token_expires_at
+    with _token_lock:
+        _access_token = None
+        _token_expires_at = 0.0
+
+
 def get_access_token(force_refresh: bool = False) -> str | None:
     """获取企业微信 access_token，带本地缓存（默认提前 5 分钟过期）。
 
@@ -91,10 +99,10 @@ def send_wechat_message(
     Returns:
         (ok, msg): ok=True 表示发送成功；msg 是给人看的描述。
     """
-    if not Config.WECHAT_WORK_ENABLED:
-        return False, "企业微信通知未启用 (WECHAT_WORK_ENABLED=false)"
     if not Config.WECHAT_WORK_AGENTID:
         return False, "未配置 WECHAT_WORK_AGENTID"
+    if not Config.WECHAT_WORK_CORPID or not Config.WECHAT_WORK_CORPSECRET:
+        return False, "未配置 corpid / corpsecret"
 
     # 企业微信 text 消息上限 2048 字节，按字节截断（中文友好）
     content = _truncate_to_bytes(content or "", 2000)

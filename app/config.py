@@ -130,7 +130,7 @@ class Config:
 
 
 # ===== 运行时配置持久化（UI 修改的参数存 JSON，重启后保留）=====
-# 只持久化 UI 可调的参数（不含企业微信模块）
+# 持久化 UI 可调的参数（含企业微信模块）
 _RUNTIME_CONFIG_PATH = os.path.join(
     os.path.dirname(os.getenv("DB_PATH", "/app/data/logs.db")),
     "runtime_config.json",
@@ -138,6 +138,30 @@ _RUNTIME_CONFIG_PATH = os.path.join(
 
 # 密码最小长度
 WEB_PASSWORD_MIN_LEN = 6
+
+# 列表型配置：Config 中保存为 list，JSON/表单里用逗号分隔字符串
+_LIST_KEYS = {
+    "EXCLUDE_CONTAINERS",
+    "WECHAT_WORK_ERROR_KEYWORDS",
+    "WECHAT_WORK_INCLUDE_CONTAINERS",
+}
+# 布尔型配置
+_BOOL_KEYS = {
+    "WECHAT_WORK_ENABLED",
+    "WECHAT_WORK_NOTIFY_ON_INIT",
+}
+
+
+def _to_bool(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "on", "y")
+
+
+def _to_list(v) -> list:
+    if isinstance(v, (list, tuple)):
+        return [str(x).strip() for x in v if str(x).strip()]
+    return [c.strip() for c in str(v).split(",") if c.strip()]
 
 
 def _hash_password(pwd: str) -> str:
@@ -154,7 +178,7 @@ def _verify_password(input_pwd: str, stored: str) -> bool:
         return _hash_password(input_pwd) == stored
     return input_pwd == stored
 
-# UI 可调参数的键名 + 类型转换函数（不含企业微信模块）
+# UI 可调参数的键名 + 类型转换函数（含企业微信模块）
 UI_ADJUSTABLE = {
     "COLLECT_INTERVAL_SEC":    int,
     "INITIAL_TAIL_LINES":      int,
@@ -162,9 +186,21 @@ UI_ADJUSTABLE = {
     "BATCH_FLUSH_SEC":         float,
     "BATCH_MAX_ENTRIES":       int,
     "MAX_LOG_LINES_PER_TICK":  int,
-    "EXCLUDE_CONTAINERS":      str,   # 逗号分隔字符串，运行时拆成 list
+    "EXCLUDE_CONTAINERS":      str,
     "WEB_USERNAME":            str,
     "WEB_PASSWORD":            str,
+    # ===== 企业微信通知 =====
+    "WECHAT_WORK_ENABLED":            bool,
+    "WECHAT_WORK_CORPID":             str,
+    "WECHAT_WORK_CORPSECRET":         str,
+    "WECHAT_WORK_AGENTID":            int,
+    "WECHAT_WORK_TOUSER":             str,
+    "WECHAT_WORK_PROXY_URL":          str,
+    "WECHAT_WORK_ERROR_KEYWORDS":     str,
+    "WECHAT_WORK_COOLDOWN_SEC":       int,
+    "WECHAT_WORK_MAX_CONTENT_LEN":    int,
+    "WECHAT_WORK_INCLUDE_CONTAINERS": str,
+    "WECHAT_WORK_NOTIFY_ON_INIT":     bool,
 }
 
 
@@ -181,8 +217,10 @@ def load_runtime_config():
             continue
         val = saved[key]
         try:
-            if key == "EXCLUDE_CONTAINERS":
-                setattr(Config, key, [c.strip() for c in str(val).split(",") if c.strip()])
+            if key in _LIST_KEYS:
+                setattr(Config, key, _to_list(val))
+            elif key in _BOOL_KEYS:
+                setattr(Config, key, _to_bool(val))
             elif conv is int:
                 setattr(Config, key, int(val))
             elif conv is float:
@@ -206,9 +244,7 @@ def save_runtime_config(updates: dict) -> dict:
             rejected.append(key)
             continue
         try:
-            if key == "EXCLUDE_CONTAINERS":
-                setattr(Config, key, [c.strip() for c in str(val).split(",") if c.strip()])
-            elif key == "WEB_PASSWORD":
+            if key == "WEB_PASSWORD":
                 # 密码强度校验
                 pwd_str = str(val)
                 if len(pwd_str) < WEB_PASSWORD_MIN_LEN:
@@ -216,12 +252,24 @@ def save_runtime_config(updates: dict) -> dict:
                     continue
                 # 存哈希而非明文，防止 runtime_config.json 泄露密码
                 setattr(Config, key, _hash_password(pwd_str))
+            elif key == "WECHAT_WORK_CORPSECRET":
+                # 留空表示不修改
+                secret = str(val or "").strip()
+                if not secret:
+                    continue
+                setattr(Config, key, secret)
+            elif key in _LIST_KEYS:
+                setattr(Config, key, _to_list(val))
+            elif key in _BOOL_KEYS:
+                setattr(Config, key, _to_bool(val))
+            elif key == "WECHAT_WORK_TOUSER":
+                setattr(Config, key, str(val or "").strip() or "@all")
             elif UI_ADJUSTABLE[key] is int:
                 setattr(Config, key, int(val))
             elif UI_ADJUSTABLE[key] is float:
                 setattr(Config, key, float(val))
             else:
-                setattr(Config, key, str(val))
+                setattr(Config, key, str(val).strip())
             updated.append(key)
         except (ValueError, TypeError):
             rejected.append(key)
@@ -232,11 +280,16 @@ def save_runtime_config(updates: dict) -> dict:
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
     for key in updated:
-        existing[key] = getattr(Config, key) if key != "EXCLUDE_CONTAINERS" else ",".join(Config.EXCLUDE_CONTAINERS)
+        existing[key] = getattr(Config, key)
     try:
         os.makedirs(os.path.dirname(_RUNTIME_CONFIG_PATH), exist_ok=True)
         with open(_RUNTIME_CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(existing, f, ensure_ascii=False, indent=2)
+        # 文件里有企业微信 secret，尽量收紧权限
+        try:
+            os.chmod(_RUNTIME_CONFIG_PATH, 0o600)
+        except OSError:
+            pass
     except OSError as e:
         import logging
         logging.getLogger(__name__).error(f"保存运行时配置失败: {e}")
@@ -244,7 +297,7 @@ def save_runtime_config(updates: dict) -> dict:
 
 
 def get_ui_config() -> dict:
-    """返回 UI 可调参数的当前值（给前端用）。密码不返回真实值，只返回是否已设置。"""
+    """返回 UI 可调参数的当前值（给前端用）。密码/Secret 不返回真实值，只返回是否已设置。"""
     return {
         "COLLECT_INTERVAL_SEC":    Config.COLLECT_INTERVAL_SEC,
         "INITIAL_TAIL_LINES":      Config.INITIAL_TAIL_LINES,
@@ -256,6 +309,19 @@ def get_ui_config() -> dict:
         "WEB_USERNAME":            Config.WEB_USERNAME,
         "WEB_PASSWORD":            "",
         "WEB_PASSWORD_SET":        bool(Config.WEB_PASSWORD),
+        # ===== 企业微信通知 =====
+        "WECHAT_WORK_ENABLED":            Config.WECHAT_WORK_ENABLED,
+        "WECHAT_WORK_CORPID":             Config.WECHAT_WORK_CORPID,
+        "WECHAT_WORK_CORPSECRET":         "",
+        "WECHAT_WORK_CORPSECRET_SET":     bool(Config.WECHAT_WORK_CORPSECRET),
+        "WECHAT_WORK_AGENTID":            Config.WECHAT_WORK_AGENTID,
+        "WECHAT_WORK_TOUSER":             Config.WECHAT_WORK_TOUSER,
+        "WECHAT_WORK_PROXY_URL":          Config.WECHAT_WORK_PROXY_URL,
+        "WECHAT_WORK_ERROR_KEYWORDS":     ",".join(Config.WECHAT_WORK_ERROR_KEYWORDS),
+        "WECHAT_WORK_COOLDOWN_SEC":       Config.WECHAT_WORK_COOLDOWN_SEC,
+        "WECHAT_WORK_MAX_CONTENT_LEN":    Config.WECHAT_WORK_MAX_CONTENT_LEN,
+        "WECHAT_WORK_INCLUDE_CONTAINERS": ",".join(Config.WECHAT_WORK_INCLUDE_CONTAINERS),
+        "WECHAT_WORK_NOTIFY_ON_INIT":     Config.WECHAT_WORK_NOTIFY_ON_INIT,
     }
 
 

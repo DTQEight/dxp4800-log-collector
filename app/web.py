@@ -292,9 +292,13 @@ def create_app() -> Flask:
         """手动触发一条测试通知，验证 corpid/corpsecret/agentid 配置是否正确。
 
         body 可选: {"message": "自定义测试内容"}；不传则发默认测试消息。
+        不要求先开启通知开关，方便在 UI 里填完凭据先测通再启用。
         """
-        if not Config.WECHAT_WORK_ENABLED:
-            return jsonify({"ok": False, "msg": "未启用企业微信通知 (WECHAT_WORK_ENABLED=false)"}), 400
+        if not (Config.WECHAT_WORK_CORPID and Config.WECHAT_WORK_CORPSECRET and Config.WECHAT_WORK_AGENTID):
+            return jsonify({
+                "ok": False,
+                "msg": "请先填写 CorpID / CorpSecret / AgentID 并保存",
+            }), 400
         try:
             from app.wechat_work import send_wechat_message
             payload = request.get_json(silent=True) or {}
@@ -395,6 +399,14 @@ def create_app() -> Flask:
         from app.config import save_runtime_config
         payload = request.get_json(silent=True) or {}
         result = save_runtime_config(payload)
+        # 企业微信凭据变了：清空 access_token 缓存，下次调用用新配置重新获取
+        credential_keys = {"WECHAT_WORK_CORPID", "WECHAT_WORK_CORPSECRET", "WECHAT_WORK_PROXY_URL"}
+        if credential_keys & set(result.get("updated", [])):
+            try:
+                from app.wechat_work import reset_access_token_cache
+                reset_access_token_cache()
+            except Exception as e:
+                logger.warning(f"重置企业微信 token 缓存失败: {e}")
         return jsonify({"ok": True, **result})
 
     return app
