@@ -189,8 +189,11 @@ class LogCollector:
             return
         try:
             from app.wechat_work import send_wechat_message
+            from app.wechat_bot import is_muted
         except Exception as e:
-            logger.warning(f"加载 wechat_work 模块失败: {e}")
+            logger.warning(f"加载企业微信模块失败: {e}")
+            return
+        if is_muted():
             return
 
         now_mono = time.monotonic()

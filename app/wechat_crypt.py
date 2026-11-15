@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import struct
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -78,6 +79,23 @@ def decrypt(cipher_text: str, aes_key: str) -> str:
         return plain[20:20 + msg_len].decode("utf-8")
     except UnicodeDecodeError as e:
         raise WeChatCryptError(f"明文不是 UTF-8: {e}") from e
+
+
+def signature(token: str, timestamp: str, nonce: str, encrypt_text: str) -> str:
+    """生成被动回复用的 msg_signature。"""
+    return _sha1_signature(token, timestamp, nonce, encrypt_text)
+
+
+def encrypt(msg: str, aes_key: str) -> str:
+    """把明文加密成回调返回用的密文（16B 随机串 + 4B 长度 + msg + PKCS7）。"""
+    key = _aes_key(aes_key)
+    data = msg.encode("utf-8")
+    plain = os.urandom(16) + struct.pack(">I", len(data)) + data
+    pad = _BLOCK_SIZE - (len(plain) % _BLOCK_SIZE)
+    plain += bytes([pad]) * pad
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(key[:16])).encryptor()
+    cipher_text = encryptor.update(plain) + encryptor.finalize()
+    return base64.b64encode(cipher_text).decode("ascii")
 
 
 def extract_encrypt(xml_text: str) -> str:

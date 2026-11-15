@@ -340,8 +340,27 @@ def create_app() -> Flask:
             return Response(f"decrypt failed: {e}", status=400, mimetype="text/plain")
 
         logger.info(f"收到企业微信回调消息: {plain[:500]}")
-        # 企业微信要求 5 秒内返回 success，否则会重试
-        return Response("success", mimetype="text/plain")
+
+        # 解析指令并生成被动回复（必须在 5 秒内返回）
+        from app.wechat_bot import build_reply_xml, handle_inbound, parse_inbound
+        try:
+            reply_text = handle_inbound(plain)
+        except Exception as e:
+            logger.error(f"处理企业微信消息失败: {e}")
+            return Response("success", mimetype="text/plain")
+        if not reply_text:
+            return Response("success", mimetype="text/plain")
+
+        try:
+            reply_xml = build_reply_xml(
+                parse_inbound(plain), reply_text, encrypted=bool(msg_signature),
+            )
+        except Exception as e:
+            logger.error(f"构建企业微信被动回复失败: {e}")
+            return Response("success", mimetype="text/plain")
+
+        logger.info(f"企业微信机器人回复: {reply_text[:100]}")
+        return Response(reply_xml, mimetype="application/xml")
 
     # ---------- API: 企业微信通知测试 ----------
     @app.route("/api/wechat/test", methods=["POST"])

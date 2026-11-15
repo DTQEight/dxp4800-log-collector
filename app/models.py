@@ -183,6 +183,38 @@ def search_logs(container_id=None, container_name=None, keyword=None,
         return [dict(r) for r in cur.fetchall()]
 
 
+def get_log_stats(keywords, since_iso, top=3):
+    """企业微信机器人统计：容器数、近期日志数、错误数、错误最多的容器。"""
+    with _db_lock:
+        conn = _get_conn()
+        containers = conn.execute("SELECT COUNT(*) FROM containers").fetchone()[0]
+        recent_lines = conn.execute(
+            "SELECT COUNT(*) FROM log_entries WHERE timestamp >= ?", (since_iso,)
+        ).fetchone()[0]
+
+        error_lines = 0
+        top_errors = []
+        if keywords:
+            like = " OR ".join(["content LIKE ?"] * len(keywords))
+            params = [since_iso] + [f"%{k}%" for k in keywords]
+            error_lines = conn.execute(
+                f"SELECT COUNT(*) FROM log_entries WHERE timestamp >= ? AND ({like})",
+                params,
+            ).fetchone()[0]
+            top_errors = [dict(r) for r in conn.execute(
+                f"SELECT container_name, COUNT(*) AS cnt FROM log_entries "
+                f"WHERE timestamp >= ? AND ({like}) "
+                f"GROUP BY container_name ORDER BY cnt DESC LIMIT ?",
+                params + [top],
+            ).fetchall()]
+    return {
+        "containers": containers,
+        "recent_lines": recent_lines,
+        "error_lines": error_lines,
+        "top_errors": top_errors,
+    }
+
+
 def cleanup_old_logs(days: int):
     """清理N天前的旧日志（按本地时区的截止点，分批删不占锁太久）"""
     cutoff_dt = now_local().replace(microsecond=0) - timedelta(days=days)
